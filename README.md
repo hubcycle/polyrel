@@ -1,6 +1,6 @@
 # polyrel
 
-Unofficial polymarket relayer client.
+Unofficial Polymarket relayer client.
 
 Dual-licensed under [Apache 2.0](LICENSE-APACHE) or [MIT](LICENSE-MIT).
 
