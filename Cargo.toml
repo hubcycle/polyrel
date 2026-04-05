@@ -5,6 +5,12 @@ edition = "2024"
 rust-version = "1.94.1"
 description = "Unofficial Polymarket relayer client"
 license = "Apache-2.0 OR MIT"
+readme = "README.md"
+repository = "https://github.com/hubcycle/polyrel"
+homepage = "https://github.com/hubcycle/polyrel"
+documentation = "https://docs.rs/polyrel"
+keywords = ["polymarket", "relayer", "gasless", "ethereum", "polygon"]
+categories = ["api-bindings"]
 
 [lints.rust]
 unsafe_code = "forbid"
