@@ -58,6 +58,10 @@ pub enum PolyrelError {
 	/// Batch must contain at least one transaction.
 	#[error("empty transaction batch error")]
 	EmptyBatch,
+
+	/// Safe wallet is already deployed.
+	#[error("safe already deployed error")]
+	SafeAlreadyDeployed,
 }
 
 impl From<reqwest::Error> for PolyrelError {

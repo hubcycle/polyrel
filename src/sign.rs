@@ -6,8 +6,10 @@ use alloy_primitives::{Address, B256, Bytes, U256, keccak256};
 use alloy_signer::Signer;
 use alloy_sol_types::{SolCall, SolStruct, sol};
 
-use crate::PolyrelError;
-use crate::types::{Config, OperationType, SignatureParams, SubmitRequest, WalletType};
+use crate::{
+	PolyrelError,
+	types::{Config, OperationType, SignatureParams, SubmitRequest, WalletType},
+};
 
 const FIELD_TX_FEE: &str = "tx_fee";
 const FIELD_GAS_PRICE: &str = "gas_price";
@@ -89,6 +91,15 @@ sol! {
 }
 
 sol! {
+	/// Safe Factory `CreateProxy` EIP-712 message.
+	struct CreateProxy {
+		address paymentToken;
+		uint256 payment;
+		address paymentReceiver;
+	}
+}
+
+sol! {
 	/// Proxy wallet call.
 	struct ProxyCall {
 		uint8 typeCode;
@@ -142,25 +153,25 @@ pub fn encode_proxy_calls(transactions: NonEmptyProxyCalls) -> Bytes {
 }
 
 /// Approve the CTF Exchange to spend USDC.e.
-pub(crate) fn usdc_approve_exchange(config: &Config, amount: U256) -> Call {
+pub fn usdc_approve_exchange(config: &Config, amount: U256) -> Call {
 	let calldata = IERC20::approveCall { spender: config.ctf_exchange(), value: amount };
 	(config.usdc_e(), Bytes::from(calldata.abi_encode()))
 }
 
 /// Approve the Neg-Risk CTF Exchange to spend USDC.e.
-pub(crate) fn usdc_approve_neg_risk_exchange(config: &Config, amount: U256) -> Call {
+pub fn usdc_approve_neg_risk_exchange(config: &Config, amount: U256) -> Call {
 	let calldata = IERC20::approveCall { spender: config.neg_risk_ctf_exchange(), value: amount };
 	(config.usdc_e(), Bytes::from(calldata.abi_encode()))
 }
 
 /// Transfer USDC.e to a recipient.
-pub(crate) fn usdc_transfer(config: &Config, to: Address, amount: U256) -> Call {
+pub fn usdc_transfer(config: &Config, to: Address, amount: U256) -> Call {
 	let calldata = IERC20::transferCall { to, value: amount };
 	(config.usdc_e(), Bytes::from(calldata.abi_encode()))
 }
 
 /// Approve the CTF Exchange as operator for Conditional Tokens.
-pub(crate) fn ctf_approve_exchange(config: &Config) -> Call {
+pub fn ctf_approve_exchange(config: &Config) -> Call {
 	let calldata =
 		IERC1155::setApprovalForAllCall { operator: config.ctf_exchange(), approved: true };
 	(
@@ -170,7 +181,7 @@ pub(crate) fn ctf_approve_exchange(config: &Config) -> Call {
 }
 
 /// Approve the Neg-Risk CTF Exchange as operator for Conditional Tokens.
-pub(crate) fn ctf_approve_neg_risk_exchange(config: &Config) -> Call {
+pub fn ctf_approve_neg_risk_exchange(config: &Config) -> Call {
 	let calldata = IERC1155::setApprovalForAllCall {
 		operator: config.neg_risk_ctf_exchange(),
 		approved: true,
@@ -182,7 +193,7 @@ pub(crate) fn ctf_approve_neg_risk_exchange(config: &Config) -> Call {
 }
 
 /// Transfer a conditional token position (ERC-1155).
-pub(crate) fn ctf_transfer(
+pub fn ctf_transfer(
 	config: &Config,
 	from: Address,
 	to: Address,
@@ -203,7 +214,7 @@ pub(crate) fn ctf_transfer(
 }
 
 /// Split a collateral position into conditional outcome tokens.
-pub(crate) fn ctf_split_position(
+pub fn ctf_split_position(
 	config: &Config,
 	condition_id: B256,
 	partition: Vec<U256>,
@@ -223,7 +234,7 @@ pub(crate) fn ctf_split_position(
 }
 
 /// Merge conditional outcome tokens back into collateral.
-pub(crate) fn ctf_merge_positions(
+pub fn ctf_merge_positions(
 	config: &Config,
 	condition_id: B256,
 	partition: Vec<U256>,
@@ -243,11 +254,7 @@ pub(crate) fn ctf_merge_positions(
 }
 
 /// Redeem resolved outcome tokens for collateral.
-pub(crate) fn ctf_redeem_positions(
-	config: &Config,
-	condition_id: B256,
-	index_sets: Vec<U256>,
-) -> Call {
+pub fn ctf_redeem_positions(config: &Config, condition_id: B256, index_sets: Vec<U256>) -> Call {
 	let calldata = IConditionalTokens::redeemPositionsCall {
 		collateralToken: config.usdc_e(),
 		parentCollectionId: B256::ZERO,
@@ -373,7 +380,13 @@ fn create2_address(deployer: Address, salt: B256, init_code_hash: B256) -> Addre
 }
 
 /// Compute the EIP-712 Safe transaction hash.
-pub(crate) fn safe_tx_hash(
+///
+/// The returned hash must be signed with `signer.sign_message(hash.as_slice())`
+/// (EIP-191 personal_sign), **not** `sign_hash`. The resulting signature must
+/// then be packed via [`pack_safe_signature`] before submission. For most
+/// use cases, prefer [`crate::RelayerClient::sign_and_submit_safe`] which handles
+/// this sequence automatically.
+pub fn safe_tx_hash(
 	chain_id: u64,
 	safe_address: Address,
 	tx: &SafeTransaction,
@@ -434,28 +447,47 @@ pub(crate) async fn sign_safe_transaction<S: Signer + Sync>(
 		.build())
 }
 
-/// Build a Safe-create (deployment) request.
+/// Sign and build a Safe-create (deployment) request.
 ///
-/// The Safe address is derived deterministically from signer + factory.
-pub(crate) fn build_safe_create_request(
+/// Signs the `CreateProxy` EIP-712 typed data and derives the Safe
+/// address deterministically from signer + factory.
+pub(crate) async fn sign_safe_create_request<S: Signer + Sync>(
+	signer: &S,
 	config: &Config,
-	signer_address: Address,
-	signature: Cow<'static, str>,
-) -> SubmitRequest {
+) -> Result<SubmitRequest, PolyrelError> {
 	let safe_address = derive_safe_address(
-		signer_address,
+		signer.address(),
 		config.safe_factory(),
 		config.safe_init_code_hash(),
 	);
-	SubmitRequest::builder()
+
+	let domain = alloy_sol_types::Eip712Domain {
+		name: Some(crate::SAFE_FACTORY_NAME.into()),
+		chain_id: Some(U256::from(config.chain_id())),
+		verifying_contract: Some(config.safe_factory()),
+		..Default::default()
+	};
+	let msg = CreateProxy {
+		paymentToken: Address::ZERO,
+		payment: U256::ZERO,
+		paymentReceiver: Address::ZERO,
+	};
+	let hash = msg.eip712_signing_hash(&domain);
+
+	let signature = signer
+		.sign_hash(&hash)
+		.await
+		.map_err(|e| PolyrelError::Signing(Cow::Owned(e.to_string())))?;
+
+	Ok(SubmitRequest::builder()
 		.wallet_type(WalletType::SafeCreate)
-		.from(signer_address.to_string().into())
+		.from(signer.address().to_string().into())
 		.to(config.safe_factory().to_string().into())
 		.maybe_proxy_wallet(Some(format!("{safe_address:#x}").into()))
 		.data("0x".into())
-		.signature(signature)
+		.signature(format!("0x{}", alloy_primitives::hex::encode(signature.as_bytes())).into())
 		.signature_params(SignatureParams::safe_create())
-		.build()
+		.build())
 }
 
 /// Parameters for a Proxy wallet relay transaction.
@@ -944,5 +976,39 @@ mod tests {
 			result,
 			Err(PolyrelError::InvalidNumericField { field: FIELD_GAS_LIMIT, .. })
 		));
+	}
+
+	#[tokio::test]
+	async fn sign_safe_create_request_produces_correct_fields() {
+		// Arrange
+		let signer = alloy_signer_local::PrivateKeySigner::random();
+		let config = crate::types::Config::builder().build().unwrap();
+
+		// Act
+		let request = sign_safe_create_request(&signer, &config).await.unwrap();
+
+		// Assert
+		let expected_safe = derive_safe_address(
+			signer.address(),
+			config.safe_factory(),
+			config.safe_init_code_hash(),
+		);
+		assert_eq!(request.wallet_type, WalletType::SafeCreate);
+		assert_eq!(request.data, "0x");
+		assert_eq!(request.to, config.safe_factory().to_string());
+		assert_eq!(request.from, signer.address().to_string());
+		assert_eq!(
+			request.proxy_wallet.as_deref(),
+			Some(format!("{expected_safe:#x}").as_str())
+		);
+		assert!(request.signature.starts_with("0x"));
+		assert!(request.nonce.is_none());
+
+		let zero = Address::ZERO.to_string();
+		let params = &request.signature_params;
+		assert_eq!(params.payment_token.as_deref(), Some(zero.as_str()));
+		assert_eq!(params.payment.as_deref(), Some("0"));
+		assert_eq!(params.payment_receiver.as_deref(), Some(zero.as_str()));
+		assert!(params.gas_price.is_none());
 	}
 }
