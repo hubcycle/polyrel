@@ -80,33 +80,42 @@
 //! assert_eq!(config.base_url().scheme(), "https");
 //! ```
 //!
-//! # Batching with MultiSend
+//! # Batch approvals with MultiSend
 //!
-//! Multiple Safe transactions can be aggregated into a single
-//! MultiSend delegate call:
+//! Combine multiple approvals into a single relayer transaction using
+//! the public calldata builders and [`aggregate_transactions`]:
 //!
 //! ```
-//! use alloy_primitives::{Address, U256};
-//! use polyrel::{SafeTransaction, NonEmptyTransactions, OperationType, aggregate_transactions};
+//! use alloy_primitives::U256;
+//! use polyrel::{Config, NonEmptyTransactions, OperationType, SafeTransaction};
+//!
+//! let config = Config::builder().build().unwrap();
+//!
+//! let (to1, data1) = polyrel::usdc_approve_exchange(&config, U256::MAX);
+//! let (to2, data2) = polyrel::ctf_approve_exchange(&config);
 //!
 //! let tx1 = SafeTransaction {
-//!     to: Address::ZERO,
+//!     to: to1,
 //!     value: U256::ZERO,
-//!     data: vec![0x01],
+//!     data: data1.to_vec(),
 //!     operation: OperationType::Call,
 //! };
 //! let tx2 = SafeTransaction {
-//!     to: Address::ZERO,
+//!     to: to2,
 //!     value: U256::ZERO,
-//!     data: vec![0x02],
+//!     data: data2.to_vec(),
 //!     operation: OperationType::Call,
 //! };
+//!
 //! let batch = NonEmptyTransactions::new(vec![tx1, tx2]).unwrap();
-//! let multisend_addr = Address::ZERO; // use config.safe_multisend() in practice
-//! let combined = aggregate_transactions(batch, multisend_addr);
+//! let combined = polyrel::aggregate_transactions(batch, config.safe_multisend());
 //!
 //! assert_eq!(combined.operation, OperationType::DelegateCall);
+//! assert_eq!(combined.to, config.safe_multisend());
 //! ```
+//!
+//! Then submit with
+//! `client.sign_and_submit_safe(&signer, combined, nonce).await`.
 //!
 //! # Safe signature packing
 //!
@@ -177,9 +186,12 @@ pub use auth::{Auth, BuilderCredentials, RelayerApiKey};
 pub use client::{Authenticated, RelayerClient, Unauthenticated};
 pub use error::PolyrelError;
 pub use sign::{
-	NonEmptyProxyCalls, NonEmptyTransactions, ProxyTransactionArgs, SafeTransaction,
-	aggregate_transactions, derive_proxy_address, derive_safe_address, encode_proxy_calls,
-	neg_risk_redeem_positions, pack_safe_signature, sign_proxy_transaction,
+	Call, NonEmptyProxyCalls, NonEmptyTransactions, ProxyTransactionArgs, SafeTransaction,
+	aggregate_transactions, ctf_approve_exchange, ctf_approve_neg_risk_exchange,
+	ctf_merge_positions, ctf_redeem_positions, ctf_split_position, ctf_transfer,
+	derive_proxy_address, derive_safe_address, encode_proxy_calls, neg_risk_redeem_positions,
+	pack_safe_signature, safe_tx_hash, sign_proxy_transaction, usdc_approve_exchange,
+	usdc_approve_neg_risk_exchange, usdc_transfer,
 };
 pub use types::{
 	Config, DeployedResponse, OperationType, RelayerInfo, RelayerTransaction, SignatureParams,

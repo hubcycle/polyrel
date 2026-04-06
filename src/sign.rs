@@ -153,25 +153,25 @@ pub fn encode_proxy_calls(transactions: NonEmptyProxyCalls) -> Bytes {
 }
 
 /// Approve the CTF Exchange to spend USDC.e.
-pub(crate) fn usdc_approve_exchange(config: &Config, amount: U256) -> Call {
+pub fn usdc_approve_exchange(config: &Config, amount: U256) -> Call {
 	let calldata = IERC20::approveCall { spender: config.ctf_exchange(), value: amount };
 	(config.usdc_e(), Bytes::from(calldata.abi_encode()))
 }
 
 /// Approve the Neg-Risk CTF Exchange to spend USDC.e.
-pub(crate) fn usdc_approve_neg_risk_exchange(config: &Config, amount: U256) -> Call {
+pub fn usdc_approve_neg_risk_exchange(config: &Config, amount: U256) -> Call {
 	let calldata = IERC20::approveCall { spender: config.neg_risk_ctf_exchange(), value: amount };
 	(config.usdc_e(), Bytes::from(calldata.abi_encode()))
 }
 
 /// Transfer USDC.e to a recipient.
-pub(crate) fn usdc_transfer(config: &Config, to: Address, amount: U256) -> Call {
+pub fn usdc_transfer(config: &Config, to: Address, amount: U256) -> Call {
 	let calldata = IERC20::transferCall { to, value: amount };
 	(config.usdc_e(), Bytes::from(calldata.abi_encode()))
 }
 
 /// Approve the CTF Exchange as operator for Conditional Tokens.
-pub(crate) fn ctf_approve_exchange(config: &Config) -> Call {
+pub fn ctf_approve_exchange(config: &Config) -> Call {
 	let calldata =
 		IERC1155::setApprovalForAllCall { operator: config.ctf_exchange(), approved: true };
 	(
@@ -181,7 +181,7 @@ pub(crate) fn ctf_approve_exchange(config: &Config) -> Call {
 }
 
 /// Approve the Neg-Risk CTF Exchange as operator for Conditional Tokens.
-pub(crate) fn ctf_approve_neg_risk_exchange(config: &Config) -> Call {
+pub fn ctf_approve_neg_risk_exchange(config: &Config) -> Call {
 	let calldata = IERC1155::setApprovalForAllCall {
 		operator: config.neg_risk_ctf_exchange(),
 		approved: true,
@@ -193,7 +193,7 @@ pub(crate) fn ctf_approve_neg_risk_exchange(config: &Config) -> Call {
 }
 
 /// Transfer a conditional token position (ERC-1155).
-pub(crate) fn ctf_transfer(
+pub fn ctf_transfer(
 	config: &Config,
 	from: Address,
 	to: Address,
@@ -214,7 +214,7 @@ pub(crate) fn ctf_transfer(
 }
 
 /// Split a collateral position into conditional outcome tokens.
-pub(crate) fn ctf_split_position(
+pub fn ctf_split_position(
 	config: &Config,
 	condition_id: B256,
 	partition: Vec<U256>,
@@ -234,7 +234,7 @@ pub(crate) fn ctf_split_position(
 }
 
 /// Merge conditional outcome tokens back into collateral.
-pub(crate) fn ctf_merge_positions(
+pub fn ctf_merge_positions(
 	config: &Config,
 	condition_id: B256,
 	partition: Vec<U256>,
@@ -254,11 +254,7 @@ pub(crate) fn ctf_merge_positions(
 }
 
 /// Redeem resolved outcome tokens for collateral.
-pub(crate) fn ctf_redeem_positions(
-	config: &Config,
-	condition_id: B256,
-	index_sets: Vec<U256>,
-) -> Call {
+pub fn ctf_redeem_positions(config: &Config, condition_id: B256, index_sets: Vec<U256>) -> Call {
 	let calldata = IConditionalTokens::redeemPositionsCall {
 		collateralToken: config.usdc_e(),
 		parentCollectionId: B256::ZERO,
@@ -384,7 +380,13 @@ fn create2_address(deployer: Address, salt: B256, init_code_hash: B256) -> Addre
 }
 
 /// Compute the EIP-712 Safe transaction hash.
-pub(crate) fn safe_tx_hash(
+///
+/// The returned hash must be signed with `signer.sign_message(hash.as_slice())`
+/// (EIP-191 personal_sign), **not** `sign_hash`. The resulting signature must
+/// then be packed via [`pack_safe_signature`] before submission. For most
+/// use cases, prefer [`crate::RelayerClient::sign_and_submit_safe`] which handles
+/// this sequence automatically.
+pub fn safe_tx_hash(
 	chain_id: u64,
 	safe_address: Address,
 	tx: &SafeTransaction,
