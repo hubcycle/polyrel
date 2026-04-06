@@ -208,7 +208,8 @@ pub(crate) const PROXY_WALLET_FACTORY: Address =
 
 pub(crate) const RELAY_HUB: Address = address!("D216153c06E857cD7f72665E0aF1d7D82172F494");
 
-pub(crate) const SAFE_FACTORY: Address = address!("aacFeEa03eb1561C4e67d661e40682Bd20E3541b");
+/// Gnosis Safe Factory (Polygon mainnet default).
+pub const SAFE_FACTORY: Address = address!("aacFeEa03eb1561C4e67d661e40682Bd20E3541b");
 
 pub(crate) const SAFE_MULTISEND: Address = address!("A238CBeb142c10Ef7Ad8442C6D1f9E89e07e7761");
 

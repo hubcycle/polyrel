@@ -6,15 +6,16 @@ use std::borrow::Cow;
 
 use alloy_primitives::{Address, B256, U256};
 use alloy_signer::Signer;
-use reqwest::StatusCode;
-use reqwest::header::CONTENT_TYPE;
+use reqwest::{StatusCode, header::CONTENT_TYPE};
 
-use crate::auth::Auth;
-use crate::error::PolyrelError;
-use crate::sign;
-use crate::types::{
-	Config, DeployedResponse, OperationType, RelayerInfo, RelayerTransaction, SubmitRequest,
-	SubmitResponse, WalletType,
+use crate::{
+	auth::Auth,
+	error::PolyrelError,
+	sign,
+	types::{
+		Config, DeployedResponse, OperationType, RelayerInfo, RelayerTransaction, SubmitRequest,
+		SubmitResponse, WalletType,
+	},
 };
 
 const PATH_SUBMIT: &str = "submit";
@@ -372,15 +373,25 @@ impl RelayerClient<Authenticated> {
 		self.sign_and_submit_safe(signer, tx, nonce).await
 	}
 
-	/// Submit a Safe-create (deployment) request.
+	/// Sign and submit a Safe-create (deployment) request.
 	///
-	/// The Safe address is derived from the signer + factory.
-	pub async fn deploy_safe(
+	/// Checks whether the Safe is already deployed first. Returns
+	/// [`PolyrelError::SafeAlreadyDeployed`] if so. Signs the
+	/// `CreateProxy` EIP-712 typed data and derives the Safe address
+	/// from the signer + factory.
+	pub async fn deploy_safe<S: Signer + Sync>(
 		&self,
-		signer_address: Address,
-		signature: Cow<'static, str>,
+		signer: &S,
 	) -> Result<SubmitResponse, PolyrelError> {
-		let request = sign::build_safe_create_request(&self.config, signer_address, signature);
+		let safe_address = sign::derive_safe_address(
+			signer.address(),
+			self.config.safe_factory(),
+			self.config.safe_init_code_hash(),
+		);
+		if self.deployed(safe_address).await? {
+			return Err(PolyrelError::SafeAlreadyDeployed);
+		}
+		let request = sign::sign_safe_create_request(signer, &self.config).await?;
 		self.submit(&request).await
 	}
 }

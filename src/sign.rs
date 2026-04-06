@@ -6,8 +6,10 @@ use alloy_primitives::{Address, B256, Bytes, U256, keccak256};
 use alloy_signer::Signer;
 use alloy_sol_types::{SolCall, SolStruct, sol};
 
-use crate::PolyrelError;
-use crate::types::{Config, OperationType, SignatureParams, SubmitRequest, WalletType};
+use crate::{
+	PolyrelError,
+	types::{Config, OperationType, SignatureParams, SubmitRequest, WalletType},
+};
 
 const FIELD_TX_FEE: &str = "tx_fee";
 const FIELD_GAS_PRICE: &str = "gas_price";
@@ -85,6 +87,15 @@ sol! {
 			bytes32 conditionId,
 			uint256[] amounts
 		) external;
+	}
+}
+
+sol! {
+	/// Safe Factory `CreateProxy` EIP-712 message.
+	struct CreateProxy {
+		address paymentToken;
+		uint256 payment;
+		address paymentReceiver;
 	}
 }
 
@@ -434,28 +445,47 @@ pub(crate) async fn sign_safe_transaction<S: Signer + Sync>(
 		.build())
 }
 
-/// Build a Safe-create (deployment) request.
+/// Sign and build a Safe-create (deployment) request.
 ///
-/// The Safe address is derived deterministically from signer + factory.
-pub(crate) fn build_safe_create_request(
+/// Signs the `CreateProxy` EIP-712 typed data and derives the Safe
+/// address deterministically from signer + factory.
+pub(crate) async fn sign_safe_create_request<S: Signer + Sync>(
+	signer: &S,
 	config: &Config,
-	signer_address: Address,
-	signature: Cow<'static, str>,
-) -> SubmitRequest {
+) -> Result<SubmitRequest, PolyrelError> {
 	let safe_address = derive_safe_address(
-		signer_address,
+		signer.address(),
 		config.safe_factory(),
 		config.safe_init_code_hash(),
 	);
-	SubmitRequest::builder()
+
+	let domain = alloy_sol_types::Eip712Domain {
+		name: Some(crate::SAFE_FACTORY_NAME.into()),
+		chain_id: Some(U256::from(config.chain_id())),
+		verifying_contract: Some(config.safe_factory()),
+		..Default::default()
+	};
+	let msg = CreateProxy {
+		paymentToken: Address::ZERO,
+		payment: U256::ZERO,
+		paymentReceiver: Address::ZERO,
+	};
+	let hash = msg.eip712_signing_hash(&domain);
+
+	let signature = signer
+		.sign_hash(&hash)
+		.await
+		.map_err(|e| PolyrelError::Signing(Cow::Owned(e.to_string())))?;
+
+	Ok(SubmitRequest::builder()
 		.wallet_type(WalletType::SafeCreate)
-		.from(signer_address.to_string().into())
+		.from(signer.address().to_string().into())
 		.to(config.safe_factory().to_string().into())
 		.maybe_proxy_wallet(Some(format!("{safe_address:#x}").into()))
 		.data("0x".into())
-		.signature(signature)
+		.signature(format!("0x{}", alloy_primitives::hex::encode(signature.as_bytes())).into())
 		.signature_params(SignatureParams::safe_create())
-		.build()
+		.build())
 }
 
 /// Parameters for a Proxy wallet relay transaction.
@@ -944,5 +974,39 @@ mod tests {
 			result,
 			Err(PolyrelError::InvalidNumericField { field: FIELD_GAS_LIMIT, .. })
 		));
+	}
+
+	#[tokio::test]
+	async fn sign_safe_create_request_produces_correct_fields() {
+		// Arrange
+		let signer = alloy_signer_local::PrivateKeySigner::random();
+		let config = crate::types::Config::builder().build().unwrap();
+
+		// Act
+		let request = sign_safe_create_request(&signer, &config).await.unwrap();
+
+		// Assert
+		let expected_safe = derive_safe_address(
+			signer.address(),
+			config.safe_factory(),
+			config.safe_init_code_hash(),
+		);
+		assert_eq!(request.wallet_type, WalletType::SafeCreate);
+		assert_eq!(request.data, "0x");
+		assert_eq!(request.to, config.safe_factory().to_string());
+		assert_eq!(request.from, signer.address().to_string());
+		assert_eq!(
+			request.proxy_wallet.as_deref(),
+			Some(format!("{expected_safe:#x}").as_str())
+		);
+		assert!(request.signature.starts_with("0x"));
+		assert!(request.nonce.is_none());
+
+		let zero = Address::ZERO.to_string();
+		let params = &request.signature_params;
+		assert_eq!(params.payment_token.as_deref(), Some(zero.as_str()));
+		assert_eq!(params.payment.as_deref(), Some("0"));
+		assert_eq!(params.payment_receiver.as_deref(), Some(zero.as_str()));
+		assert!(params.gas_price.is_none());
 	}
 }
