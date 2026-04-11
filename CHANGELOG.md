@@ -1,10 +1,27 @@
+## [0.2.1] - 2026-04-11
+
+### features
+
+- add neg-risk adapter approval helpers
 ## [0.2.0] - 2026-04-06
 
 ### features
 
-- add polyrel relayer client crate
 - sign Safe creation internally and add deployment preflight check
 - export calldata builders and document batch approval workflow
+
+### documentation
+
+- update CHANGELOG.md for v0.2.0
+
+### miscellaneous
+
+- bump version to 0.2.0
+## [0.1.0] - 2026-04-05
+
+### features
+
+- add polyrel relayer client crate
 
 ### documentation
 
@@ -23,4 +40,3 @@
 - add git-cliff configuration
 - fix README
 - add package metadata to Cargo.toml
-- bump version to 0.2.0

@@ -187,11 +187,12 @@ pub use client::{Authenticated, RelayerClient, Unauthenticated};
 pub use error::PolyrelError;
 pub use sign::{
 	Call, NonEmptyProxyCalls, NonEmptyTransactions, ProxyTransactionArgs, SafeTransaction,
-	aggregate_transactions, ctf_approve_exchange, ctf_approve_neg_risk_exchange,
-	ctf_merge_positions, ctf_redeem_positions, ctf_split_position, ctf_transfer,
-	derive_proxy_address, derive_safe_address, encode_proxy_calls, neg_risk_redeem_positions,
-	pack_safe_signature, safe_tx_hash, sign_proxy_transaction, usdc_approve_exchange,
-	usdc_approve_neg_risk_exchange, usdc_transfer,
+	aggregate_transactions, ctf_approve_exchange, ctf_approve_neg_risk_adapter,
+	ctf_approve_neg_risk_exchange, ctf_merge_positions, ctf_redeem_positions,
+	ctf_split_position, ctf_transfer, derive_proxy_address, derive_safe_address,
+	encode_proxy_calls, neg_risk_redeem_positions, pack_safe_signature, safe_tx_hash,
+	sign_proxy_transaction, usdc_approve_conditional_tokens, usdc_approve_exchange,
+	usdc_approve_neg_risk_adapter, usdc_approve_neg_risk_exchange, usdc_transfer,
 };
 pub use types::{
 	Config, DeployedResponse, OperationType, RelayerInfo, RelayerTransaction, SignatureParams,
@@ -210,6 +211,8 @@ pub(crate) const CTF_EXCHANGE: Address = address!("4bFb41d5B3570DeFd03C39a9A4D8d
 
 pub(crate) const NEG_RISK_CTF_EXCHANGE: Address =
 	address!("C5d563A36AE78145C45a50134d48A1215220f80a");
+
+pub(crate) const NEG_RISK_ADAPTER: Address = address!("d91E80cF2E7be2e162c6513ceD06f1dD0dA35296");
 
 pub(crate) const CONDITIONAL_TOKENS: Address = address!("4D97DCd97eC945f40cF65F87097ACe5EA0476045");
 
