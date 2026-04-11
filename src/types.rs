@@ -12,6 +12,7 @@ pub struct Config {
 	chain_id: u64,
 	ctf_exchange: Address,
 	neg_risk_ctf_exchange: Address,
+	neg_risk_adapter: Address,
 	conditional_tokens: Address,
 	usdc_e: Address,
 	proxy_wallet_factory: Address,
@@ -31,6 +32,7 @@ impl Config {
 		chain_id: Option<u64>,
 		ctf_exchange: Option<Address>,
 		neg_risk_ctf_exchange: Option<Address>,
+		neg_risk_adapter: Option<Address>,
 		conditional_tokens: Option<Address>,
 		usdc_e: Option<Address>,
 		proxy_wallet_factory: Option<Address>,
@@ -69,6 +71,7 @@ impl Config {
 			chain_id: chain_id.unwrap_or(crate::CHAIN_ID),
 			ctf_exchange: ctf_exchange.unwrap_or(crate::CTF_EXCHANGE),
 			neg_risk_ctf_exchange: neg_risk_ctf_exchange.unwrap_or(crate::NEG_RISK_CTF_EXCHANGE),
+			neg_risk_adapter: neg_risk_adapter.unwrap_or(crate::NEG_RISK_ADAPTER),
 			conditional_tokens: conditional_tokens.unwrap_or(crate::CONDITIONAL_TOKENS),
 			usdc_e: usdc_e.unwrap_or(crate::USDC_E),
 			proxy_wallet_factory: proxy_wallet_factory.unwrap_or(crate::PROXY_WALLET_FACTORY),
@@ -100,6 +103,11 @@ impl Config {
 	/// Neg-Risk CTF Exchange address.
 	pub fn neg_risk_ctf_exchange(&self) -> Address {
 		self.neg_risk_ctf_exchange
+	}
+
+	/// Neg-Risk Adapter address.
+	pub fn neg_risk_adapter(&self) -> Address {
+		self.neg_risk_adapter
 	}
 
 	/// Conditional Tokens address.

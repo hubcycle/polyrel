@@ -192,6 +192,32 @@ pub fn ctf_approve_neg_risk_exchange(config: &Config) -> Call {
 	)
 }
 
+/// Approve the Conditional Tokens contract to spend USDC.e (for split/merge).
+pub fn usdc_approve_conditional_tokens(config: &Config, amount: U256) -> Call {
+	let calldata =
+		IERC20::approveCall { spender: config.conditional_tokens(), value: amount };
+	(config.usdc_e(), Bytes::from(calldata.abi_encode()))
+}
+
+/// Approve the Neg-Risk Adapter to spend USDC.e (for neg-risk operations).
+pub fn usdc_approve_neg_risk_adapter(config: &Config, amount: U256) -> Call {
+	let calldata =
+		IERC20::approveCall { spender: config.neg_risk_adapter(), value: amount };
+	(config.usdc_e(), Bytes::from(calldata.abi_encode()))
+}
+
+/// Approve the Neg-Risk Adapter as operator for Conditional Tokens.
+pub fn ctf_approve_neg_risk_adapter(config: &Config) -> Call {
+	let calldata = IERC1155::setApprovalForAllCall {
+		operator: config.neg_risk_adapter(),
+		approved: true,
+	};
+	(
+		config.conditional_tokens(),
+		Bytes::from(calldata.abi_encode()),
+	)
+}
+
 /// Transfer a conditional token position (ERC-1155).
 pub fn ctf_transfer(
 	config: &Config,
@@ -909,6 +935,67 @@ mod tests {
 
 		// Assert
 		assert_eq!(&data[..4], &set_approval_selector);
+	}
+
+	#[test]
+	fn usdc_approve_conditional_tokens_encodes_correct_spender_and_amount() {
+		// Arrange
+		let config = crate::types::Config::builder().build().unwrap();
+		let amount = U256::from(100);
+
+		// Act
+		let (target, data) = usdc_approve_conditional_tokens(&config, amount);
+
+		// Assert: target is USDC.e
+		assert_eq!(target, config.usdc_e());
+		// Assert: selector is approve(address,uint256)
+		assert_eq!(&data[..4], &[0x09, 0x5e, 0xa7, 0xb3]);
+		// Assert: spender is conditional_tokens (bytes 4..36, left-padded address)
+		let spender = Address::from_slice(&data[16..36]);
+		assert_eq!(spender, config.conditional_tokens());
+		// Assert: amount is 100 (bytes 36..68)
+		let encoded_amount = U256::from_be_slice(&data[36..68]);
+		assert_eq!(encoded_amount, amount);
+	}
+
+	#[test]
+	fn usdc_approve_neg_risk_adapter_encodes_correct_spender_and_amount() {
+		// Arrange
+		let config = crate::types::Config::builder().build().unwrap();
+		let amount = U256::from(42);
+
+		// Act
+		let (target, data) = usdc_approve_neg_risk_adapter(&config, amount);
+
+		// Assert: target is USDC.e
+		assert_eq!(target, config.usdc_e());
+		// Assert: selector is approve(address,uint256)
+		assert_eq!(&data[..4], &[0x09, 0x5e, 0xa7, 0xb3]);
+		// Assert: spender is neg_risk_adapter
+		let spender = Address::from_slice(&data[16..36]);
+		assert_eq!(spender, config.neg_risk_adapter());
+		// Assert: amount is 42
+		let encoded_amount = U256::from_be_slice(&data[36..68]);
+		assert_eq!(encoded_amount, amount);
+	}
+
+	#[test]
+	fn ctf_approve_neg_risk_adapter_encodes_correct_operator_and_approved() {
+		// Arrange
+		let config = crate::types::Config::builder().build().unwrap();
+
+		// Act
+		let (target, data) = ctf_approve_neg_risk_adapter(&config);
+
+		// Assert: target is conditional_tokens
+		assert_eq!(target, config.conditional_tokens());
+		// Assert: selector is setApprovalForAll(address,bool)
+		assert_eq!(&data[..4], &[0xa2, 0x2c, 0xb4, 0x65]);
+		// Assert: operator is neg_risk_adapter
+		let operator = Address::from_slice(&data[16..36]);
+		assert_eq!(operator, config.neg_risk_adapter());
+		// Assert: approved is true (bytes 36..68, last byte is 1)
+		assert_eq!(data[67], 1);
 	}
 
 	#[test]

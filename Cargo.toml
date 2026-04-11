@@ -1,6 +1,6 @@
 [package]
 name = "polyrel"
-version = "0.2.0"
+version = "0.2.1-alpha"
 edition = "2024"
 rust-version = "1.94.1"
 description = "Unofficial Polymarket relayer client"

@@ -60,6 +60,7 @@ impl RelayerClient<Unauthenticated> {
 		chain_id: Option<u64>,
 		ctf_exchange: Option<Address>,
 		neg_risk_ctf_exchange: Option<Address>,
+		neg_risk_adapter: Option<Address>,
 		conditional_tokens: Option<Address>,
 		usdc_e: Option<Address>,
 		proxy_wallet_factory: Option<Address>,
@@ -75,6 +76,7 @@ impl RelayerClient<Unauthenticated> {
 			.maybe_chain_id(chain_id)
 			.maybe_ctf_exchange(ctf_exchange)
 			.maybe_neg_risk_ctf_exchange(neg_risk_ctf_exchange)
+			.maybe_neg_risk_adapter(neg_risk_adapter)
 			.maybe_conditional_tokens(conditional_tokens)
 			.maybe_usdc_e(usdc_e)
 			.maybe_proxy_wallet_factory(proxy_wallet_factory)
