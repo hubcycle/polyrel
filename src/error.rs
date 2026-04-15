@@ -64,14 +64,48 @@ pub enum PolyrelError {
 	SafeAlreadyDeployed,
 }
 
+impl PolyrelError {
+	/// Construct a [`PolyrelError::Http`] from anything convertible into `Cow<'static, str>`.
+	pub fn http<E>(msg: E) -> Self
+	where
+		Cow<'static, str>: From<E>,
+	{
+		Self::Http(Cow::from(msg))
+	}
+
+	/// Construct a [`PolyrelError::Deserialize`] from anything convertible into `Cow<'static, str>`.
+	pub fn deserialize<E>(msg: E) -> Self
+	where
+		Cow<'static, str>: From<E>,
+	{
+		Self::Deserialize(Cow::from(msg))
+	}
+
+	/// Construct a [`PolyrelError::Signing`] from anything convertible into `Cow<'static, str>`.
+	pub fn signing<E>(msg: E) -> Self
+	where
+		Cow<'static, str>: From<E>,
+	{
+		Self::Signing(Cow::from(msg))
+	}
+
+	/// Construct a [`PolyrelError::InvalidSignature`] from anything convertible into `Cow<'static, str>`.
+	pub fn invalid_signature<E>(msg: E) -> Self
+	where
+		Cow<'static, str>: From<E>,
+	{
+		Self::InvalidSignature(Cow::from(msg))
+	}
+}
+
 impl From<reqwest::Error> for PolyrelError {
 	fn from(err: reqwest::Error) -> Self {
-		Self::Http(Cow::Owned(err.to_string()))
+		Self::http(err.to_string())
 	}
 }
 
 impl From<serde_json::Error> for PolyrelError {
 	fn from(err: serde_json::Error) -> Self {
-		Self::Deserialize(Cow::Owned(err.to_string()))
+		Self::deserialize(err.to_string())
 	}
 }

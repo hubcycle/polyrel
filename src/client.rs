@@ -201,9 +201,11 @@ impl<S> RelayerClient<S> {
 			.send()
 			.await?;
 		let payload: serde_json::Value = handle_response(resp).await?;
-		payload.get("nonce").and_then(|v| v.as_str()).map(String::from).ok_or(
-			PolyrelError::Deserialize(Cow::Borrowed("missing nonce field in response")),
-		)
+		payload
+			.get("nonce")
+			.and_then(|v| v.as_str())
+			.map(String::from)
+			.ok_or_else(|| PolyrelError::deserialize("missing nonce field in response"))
 	}
 
 	fn endpoint(&self, path: &str) -> url::Url {

@@ -44,24 +44,24 @@ impl Config {
 	) -> Result<Self, crate::PolyrelError> {
 		let url_str = base_url.as_deref().unwrap_or(crate::RELAYER_BASE_URL);
 		let mut parsed = Url::parse(url_str)
-			.map_err(|e| crate::PolyrelError::Http(Cow::Owned(format!("invalid base URL: {e}"))))?;
+			.map_err(|e| crate::PolyrelError::http(format!("invalid base URL: {e}")))?;
 		match parsed.scheme() {
 			"http" | "https" => {},
 			_ => {
-				return Err(crate::PolyrelError::Http(Cow::Borrowed(
+				return Err(crate::PolyrelError::http(
 					"base URL must use http or https scheme",
-				)));
+				));
 			},
 		}
 		if parsed.query().is_some() {
-			return Err(crate::PolyrelError::Http(Cow::Borrowed(
+			return Err(crate::PolyrelError::http(
 				"base URL must not contain a query string",
-			)));
+			));
 		}
 		if parsed.fragment().is_some() {
-			return Err(crate::PolyrelError::Http(Cow::Borrowed(
+			return Err(crate::PolyrelError::http(
 				"base URL must not contain a fragment",
-			)));
+			));
 		}
 		let trimmed = parsed.path().trim_end_matches('/').to_owned();
 		parsed.set_path(&trimmed);

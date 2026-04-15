@@ -100,10 +100,10 @@ fn builder_headers(
 	let message = format!("{timestamp}{method}{path}{body}");
 
 	let secret_bytes = decode_builder_secret(creds.secret.expose_secret())
-		.map_err(|e| PolyrelError::Signing(Cow::Owned(format!("base64 decode: {e}"))))?;
+		.map_err(|e| PolyrelError::signing(format!("base64 decode: {e}")))?;
 
 	let mut mac = HmacSha256::new_from_slice(&secret_bytes)
-		.map_err(|e| PolyrelError::Signing(Cow::Owned(format!("hmac init: {e}"))))?;
+		.map_err(|e| PolyrelError::signing(format!("hmac init: {e}")))?;
 	mac.update(message.as_bytes());
 	let signature = url_safe_base64(mac.finalize().into_bytes().as_slice());
 
@@ -111,22 +111,20 @@ fn builder_headers(
 	headers.insert(
 		HEADER_BUILDER_API_KEY,
 		HeaderValue::from_str(creds.api_key.expose_secret())
-			.map_err(|e| PolyrelError::Http(Cow::Owned(e.to_string())))?,
+			.map_err(|e| PolyrelError::http(e.to_string()))?,
 	);
 	headers.insert(
 		HEADER_BUILDER_PASSPHRASE,
 		HeaderValue::from_str(creds.passphrase.expose_secret())
-			.map_err(|e| PolyrelError::Http(Cow::Owned(e.to_string())))?,
+			.map_err(|e| PolyrelError::http(e.to_string()))?,
 	);
 	headers.insert(
 		HEADER_BUILDER_SIGNATURE,
-		HeaderValue::from_str(&signature)
-			.map_err(|e| PolyrelError::Http(Cow::Owned(e.to_string())))?,
+		HeaderValue::from_str(&signature).map_err(|e| PolyrelError::http(e.to_string()))?,
 	);
 	headers.insert(
 		HEADER_BUILDER_TIMESTAMP,
-		HeaderValue::from_str(&timestamp)
-			.map_err(|e| PolyrelError::Http(Cow::Owned(e.to_string())))?,
+		HeaderValue::from_str(&timestamp).map_err(|e| PolyrelError::http(e.to_string()))?,
 	);
 
 	Ok(headers)

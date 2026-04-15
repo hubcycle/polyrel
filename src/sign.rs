@@ -194,24 +194,20 @@ pub fn ctf_approve_neg_risk_exchange(config: &Config) -> Call {
 
 /// Approve the Conditional Tokens contract to spend USDC.e (for split/merge).
 pub fn usdc_approve_conditional_tokens(config: &Config, amount: U256) -> Call {
-	let calldata =
-		IERC20::approveCall { spender: config.conditional_tokens(), value: amount };
+	let calldata = IERC20::approveCall { spender: config.conditional_tokens(), value: amount };
 	(config.usdc_e(), Bytes::from(calldata.abi_encode()))
 }
 
 /// Approve the Neg-Risk Adapter to spend USDC.e (for neg-risk operations).
 pub fn usdc_approve_neg_risk_adapter(config: &Config, amount: U256) -> Call {
-	let calldata =
-		IERC20::approveCall { spender: config.neg_risk_adapter(), value: amount };
+	let calldata = IERC20::approveCall { spender: config.neg_risk_adapter(), value: amount };
 	(config.usdc_e(), Bytes::from(calldata.abi_encode()))
 }
 
 /// Approve the Neg-Risk Adapter as operator for Conditional Tokens.
 pub fn ctf_approve_neg_risk_adapter(config: &Config) -> Call {
-	let calldata = IERC1155::setApprovalForAllCall {
-		operator: config.neg_risk_adapter(),
-		approved: true,
-	};
+	let calldata =
+		IERC1155::setApprovalForAllCall { operator: config.neg_risk_adapter(), approved: true };
 	(
 		config.conditional_tokens(),
 		Bytes::from(calldata.abi_encode()),
@@ -457,7 +453,7 @@ pub(crate) async fn sign_safe_transaction<S: Signer + Sync>(
 	let signature = signer
 		.sign_message(signing_hash.as_slice())
 		.await
-		.map_err(|e| PolyrelError::Signing(Cow::Owned(e.to_string())))?;
+		.map_err(|e| PolyrelError::signing(e.to_string()))?;
 
 	let packed = pack_safe_signature(&alloy_primitives::hex::encode(signature.as_bytes()))?;
 
@@ -500,10 +496,8 @@ pub(crate) async fn sign_safe_create_request<S: Signer + Sync>(
 	};
 	let hash = msg.eip712_signing_hash(&domain);
 
-	let signature = signer
-		.sign_hash(&hash)
-		.await
-		.map_err(|e| PolyrelError::Signing(Cow::Owned(e.to_string())))?;
+	let signature =
+		signer.sign_hash(&hash).await.map_err(|e| PolyrelError::signing(e.to_string()))?;
 
 	Ok(SubmitRequest::builder()
 		.wallet_type(WalletType::SafeCreate)
@@ -565,7 +559,7 @@ pub async fn sign_proxy_transaction<S: Signer + Sync>(
 	let signature = signer
 		.sign_message(struct_hash.as_slice())
 		.await
-		.map_err(|e| PolyrelError::Signing(Cow::Owned(e.to_string())))?;
+		.map_err(|e| PolyrelError::signing(e.to_string()))?;
 
 	Ok(SubmitRequest::builder()
 		.wallet_type(WalletType::Proxy)
@@ -590,22 +584,22 @@ pub async fn sign_proxy_transaction<S: Signer + Sync>(
 pub fn pack_safe_signature(sig_hex: &str) -> Result<String, PolyrelError> {
 	let raw = sig_hex.strip_prefix("0x").unwrap_or(sig_hex);
 	let mut bytes = alloy_primitives::hex::decode(raw)
-		.map_err(|_| PolyrelError::InvalidSignature(Cow::Borrowed("hex decode failed")))?;
+		.map_err(|_| PolyrelError::invalid_signature("hex decode failed"))?;
 
 	const EXPECTED_LEN: usize = 65;
 	if bytes.len() != EXPECTED_LEN {
-		return Err(PolyrelError::InvalidSignature(Cow::Borrowed(
+		return Err(PolyrelError::invalid_signature(
 			"signature must be 65 bytes",
-		)));
+		));
 	}
 
 	bytes[64] = match bytes[64] {
 		0 | 1 => bytes[64] + 31,
 		27 | 28 => bytes[64] + 4,
 		_ => {
-			return Err(PolyrelError::InvalidSignature(Cow::Borrowed(
+			return Err(PolyrelError::invalid_signature(
 				"invalid v value in signature",
-			)));
+			));
 		},
 	};
 
