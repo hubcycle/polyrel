@@ -26,24 +26,16 @@ type HmacSha256 = hmac::Hmac<sha2::Sha256>;
 /// Builder API key credentials (HMAC-SHA256).
 #[derive(Clone)]
 pub struct BuilderCredentials {
-	/// API key.
-	pub api_key: SecretString,
-
-	/// Base64-encoded HMAC secret.
-	pub secret: SecretString,
-
-	/// Passphrase.
-	pub passphrase: SecretString,
+	api_key: SecretString,
+	secret: SecretString,
+	passphrase: SecretString,
 }
 
 /// Simple relayer API key.
 #[derive(Clone)]
 pub struct RelayerApiKey {
-	/// API key string.
-	pub key: SecretString,
-
-	/// Address that owns the key.
-	pub address: Address,
+	key: SecretString,
+	address: Address,
 }
 
 /// Authentication strategy for the relayer.
@@ -54,6 +46,49 @@ pub enum Auth {
 
 	/// Simple API key.
 	Relayer(RelayerApiKey),
+}
+
+#[bon::bon]
+impl BuilderCredentials {
+	/// Construct new builder credentials.
+	#[builder]
+	pub fn new(api_key: SecretString, secret: SecretString, passphrase: SecretString) -> Self {
+		Self { api_key, secret, passphrase }
+	}
+
+	/// API key.
+	pub fn api_key(&self) -> &SecretString {
+		&self.api_key
+	}
+
+	/// Base64-encoded HMAC secret.
+	pub fn secret(&self) -> &SecretString {
+		&self.secret
+	}
+
+	/// Passphrase.
+	pub fn passphrase(&self) -> &SecretString {
+		&self.passphrase
+	}
+}
+
+#[bon::bon]
+impl RelayerApiKey {
+	/// Construct a new relayer API key.
+	#[builder]
+	pub fn new(key: SecretString, address: Address) -> Self {
+		Self { key, address }
+	}
+
+	/// API key string.
+	pub fn key(&self) -> &SecretString {
+		&self.key
+	}
+
+	/// Address that owns the key.
+	pub fn address(&self) -> Address {
+		self.address
+	}
 }
 
 impl Auth {
@@ -99,7 +134,7 @@ fn builder_headers(
 	let timestamp = timestamp_secs();
 	let message = format!("{timestamp}{method}{path}{body}");
 
-	let secret_bytes = decode_builder_secret(creds.secret.expose_secret())
+	let secret_bytes = decode_builder_secret(creds.secret().expose_secret())
 		.map_err(|e| PolyrelError::signing(format!("base64 decode: {e}")))?;
 
 	let mut mac = HmacSha256::new_from_slice(&secret_bytes)
@@ -110,12 +145,12 @@ fn builder_headers(
 	let mut headers = HeaderMap::new();
 	headers.insert(
 		HEADER_BUILDER_API_KEY,
-		HeaderValue::from_str(creds.api_key.expose_secret())
+		HeaderValue::from_str(creds.api_key().expose_secret())
 			.map_err(|e| PolyrelError::http(e.to_string()))?,
 	);
 	headers.insert(
 		HEADER_BUILDER_PASSPHRASE,
-		HeaderValue::from_str(creds.passphrase.expose_secret())
+		HeaderValue::from_str(creds.passphrase().expose_secret())
 			.map_err(|e| PolyrelError::http(e.to_string()))?,
 	);
 	headers.insert(
@@ -134,7 +169,7 @@ fn relayer_headers(key: &RelayerApiKey) -> Result<HeaderMap, PolyrelError> {
 	let mut headers = HeaderMap::new();
 	headers.insert(
 		HEADER_RELAYER_API_KEY,
-		HeaderValue::from_str(key.key.expose_secret()).map_err(|e| {
+		HeaderValue::from_str(key.key().expose_secret()).map_err(|e| {
 			PolyrelError::InvalidAuthHeader {
 				header: RELAYER_API_KEY_STR,
 				detail: Cow::Owned(e.to_string()),
@@ -143,7 +178,7 @@ fn relayer_headers(key: &RelayerApiKey) -> Result<HeaderMap, PolyrelError> {
 	);
 	headers.insert(
 		HEADER_RELAYER_API_KEY_ADDRESS,
-		HeaderValue::from_str(&key.address.to_string()).map_err(|e| {
+		HeaderValue::from_str(&key.address().to_string()).map_err(|e| {
 			PolyrelError::InvalidAuthHeader {
 				header: RELAYER_API_KEY_ADDRESS_STR,
 				detail: Cow::Owned(e.to_string()),
@@ -180,11 +215,11 @@ mod tests {
 	#[test]
 	fn builder_credentials_debug_redacts_secrets() {
 		// Arrange
-		let creds = BuilderCredentials {
-			api_key: SecretString::from("my-key"),
-			secret: SecretString::from("bXktc2VjcmV0"),
-			passphrase: SecretString::from("my-pass"),
-		};
+		let creds = BuilderCredentials::builder()
+			.api_key(SecretString::from("my-key"))
+			.secret(SecretString::from("bXktc2VjcmV0"))
+			.passphrase(SecretString::from("my-pass"))
+			.build();
 
 		// Act
 		let debug = format!("{creds:?}");
@@ -198,7 +233,10 @@ mod tests {
 	#[test]
 	fn relayer_api_key_debug_redacts_key() {
 		// Arrange
-		let key = RelayerApiKey { key: SecretString::from("secret-key"), address: Address::ZERO };
+		let key = RelayerApiKey::builder()
+			.key(SecretString::from("secret-key"))
+			.address(Address::ZERO)
+			.build();
 
 		// Act
 		let debug = format!("{key:?}");
@@ -211,13 +249,13 @@ mod tests {
 	#[test]
 	fn builder_hmac_produces_url_safe_base64_signature() {
 		// Arrange
-		let creds = BuilderCredentials {
-			api_key: SecretString::from("test-key"),
-			secret: SecretString::from(
+		let creds = BuilderCredentials::builder()
+			.api_key(SecretString::from("test-key"))
+			.secret(SecretString::from(
 				base64::engine::general_purpose::STANDARD.encode("test-secret"),
-			),
-			passphrase: SecretString::from("test-pass"),
-		};
+			))
+			.passphrase(SecretString::from("test-pass"))
+			.build();
 
 		// Act
 		let headers = builder_headers(&creds, "POST", "/submit", r#"{"data":"0x"}"#)

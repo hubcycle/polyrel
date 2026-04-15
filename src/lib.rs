@@ -17,11 +17,13 @@
 //!     .build()
 //!     .expect("default config is valid");
 //!
-//! let auth = Auth::Builder(BuilderCredentials {
-//!     api_key: SecretString::from("key"),
-//!     secret: SecretString::from("c2VjcmV0"),
-//!     passphrase: SecretString::from("pass"),
-//! });
+//! let auth = Auth::Builder(
+//!     BuilderCredentials::builder()
+//!         .api_key(SecretString::from("key"))
+//!         .secret(SecretString::from("c2VjcmV0"))
+//!         .passphrase(SecretString::from("pass"))
+//!         .build(),
+//! );
 //! let client = client.authenticate(auth);
 //! ```
 //!
@@ -86,32 +88,21 @@
 //! the public calldata builders and [`aggregate_transactions`]:
 //!
 //! ```
-//! use alloy_primitives::U256;
 //! use polyrel::{Config, NonEmptyTransactions, OperationType, SafeTransaction};
 //!
 //! let config = Config::builder().build().unwrap();
 //!
-//! let (to1, data1) = polyrel::usdc_approve_exchange(&config, U256::MAX);
+//! let (to1, data1) = polyrel::usdc_approve_exchange(&config, alloy_primitives::U256::MAX);
 //! let (to2, data2) = polyrel::ctf_approve_exchange(&config);
 //!
-//! let tx1 = SafeTransaction {
-//!     to: to1,
-//!     value: U256::ZERO,
-//!     data: data1.to_vec(),
-//!     operation: OperationType::Call,
-//! };
-//! let tx2 = SafeTransaction {
-//!     to: to2,
-//!     value: U256::ZERO,
-//!     data: data2.to_vec(),
-//!     operation: OperationType::Call,
-//! };
+//! let tx1 = SafeTransaction::builder().to(to1).data(data1.to_vec()).build();
+//! let tx2 = SafeTransaction::builder().to(to2).data(data2.to_vec()).build();
 //!
 //! let batch = NonEmptyTransactions::new(vec![tx1, tx2]).unwrap();
 //! let combined = polyrel::aggregate_transactions(batch, config.safe_multisend());
 //!
-//! assert_eq!(combined.operation, OperationType::DelegateCall);
-//! assert_eq!(combined.to, config.safe_multisend());
+//! assert_eq!(combined.operation(), OperationType::DelegateCall);
+//! assert_eq!(combined.to(), config.safe_multisend());
 //! ```
 //!
 //! Then submit with
@@ -148,11 +139,13 @@
 //!
 //! async fn run(signer: &(impl Signer + Sync)) -> Result<(), polyrel::PolyrelError> {
 //!     let client = RelayerClient::builder().build()?
-//!         .authenticate(Auth::Builder(BuilderCredentials {
-//!             api_key: SecretString::from("key"),
-//!             secret: SecretString::from("c2VjcmV0"),
-//!             passphrase: SecretString::from("pass"),
-//!         }));
+//!         .authenticate(Auth::Builder(
+//!             BuilderCredentials::builder()
+//!                 .api_key(SecretString::from("key"))
+//!                 .secret(SecretString::from("c2VjcmV0"))
+//!                 .passphrase(SecretString::from("pass"))
+//!                 .build(),
+//!         ));
 //!
 //!     // fetch the current nonce for this signer's Safe wallet
 //!     let nonce_str = client.safe_nonce(signer.address()).await?;
@@ -188,11 +181,11 @@ pub use error::PolyrelError;
 pub use sign::{
 	Call, NonEmptyProxyCalls, NonEmptyTransactions, ProxyTransactionArgs, SafeTransaction,
 	aggregate_transactions, ctf_approve_exchange, ctf_approve_neg_risk_adapter,
-	ctf_approve_neg_risk_exchange, ctf_merge_positions, ctf_redeem_positions,
-	ctf_split_position, ctf_transfer, derive_proxy_address, derive_safe_address,
-	encode_proxy_calls, neg_risk_redeem_positions, pack_safe_signature, safe_tx_hash,
-	sign_proxy_transaction, usdc_approve_conditional_tokens, usdc_approve_exchange,
-	usdc_approve_neg_risk_adapter, usdc_approve_neg_risk_exchange, usdc_transfer,
+	ctf_approve_neg_risk_exchange, ctf_merge_positions, ctf_redeem_positions, ctf_split_position,
+	ctf_transfer, derive_proxy_address, derive_safe_address, encode_proxy_calls,
+	neg_risk_redeem_positions, pack_safe_signature, safe_tx_hash, sign_proxy_transaction,
+	usdc_approve_conditional_tokens, usdc_approve_exchange, usdc_approve_neg_risk_adapter,
+	usdc_approve_neg_risk_exchange, usdc_transfer,
 };
 pub use types::{
 	Config, DeployedResponse, OperationType, RelayerInfo, RelayerTransaction, SignatureParams,
@@ -204,7 +197,21 @@ use alloy_primitives::{Address, address};
 /// Safe factory EIP-712 domain name for `CreateProxy` typed data.
 pub const SAFE_FACTORY_NAME: &str = "Polymarket Contract Proxy Factory";
 
+/// Gnosis Safe Factory (Polygon mainnet default).
+pub const SAFE_FACTORY: Address = address!("aacFeEa03eb1561C4e67d661e40682Bd20E3541b");
+
+/// Safe init code hash for CREATE2 derivation (Polygon mainnet default).
+pub const SAFE_INIT_CODE_HASH: [u8; 32] =
+	alloy_primitives::hex!("2bce2127ff07fb632d16c8347c4ebf501f4841168bed00d9e6ef715ddb6fcecf");
+
+/// Proxy init code hash for CREATE2 derivation (Polygon mainnet default).
+pub const PROXY_INIT_CODE_HASH: [u8; 32] =
+	alloy_primitives::hex!("d21df8dc65880a8606f09fe0ce3df9b8869287ab0b058be05aa9e8af6330a00b");
+
 pub(crate) const CHAIN_ID: u64 = 137;
+
+pub(crate) const SAFE_MULTISEND: Address = address!("A238CBeb142c10Ef7Ad8442C6D1f9E89e07e7761");
+
 pub(crate) const RELAYER_BASE_URL: &str = "https://relayer-v2.polymarket.com";
 
 pub(crate) const CTF_EXCHANGE: Address = address!("4bFb41d5B3570DeFd03C39a9A4D8dE6Bd8B8982E");
@@ -222,16 +229,3 @@ pub(crate) const PROXY_WALLET_FACTORY: Address =
 	address!("aB45c5A4B0c941a2F231C04C3f49182e1A254052");
 
 pub(crate) const RELAY_HUB: Address = address!("D216153c06E857cD7f72665E0aF1d7D82172F494");
-
-/// Gnosis Safe Factory (Polygon mainnet default).
-pub const SAFE_FACTORY: Address = address!("aacFeEa03eb1561C4e67d661e40682Bd20E3541b");
-
-pub(crate) const SAFE_MULTISEND: Address = address!("A238CBeb142c10Ef7Ad8442C6D1f9E89e07e7761");
-
-/// Safe init code hash for CREATE2 derivation (Polygon mainnet default).
-pub const SAFE_INIT_CODE_HASH: [u8; 32] =
-	alloy_primitives::hex!("2bce2127ff07fb632d16c8347c4ebf501f4841168bed00d9e6ef715ddb6fcecf");
-
-/// Proxy init code hash for CREATE2 derivation (Polygon mainnet default).
-pub const PROXY_INIT_CODE_HASH: [u8; 32] =
-	alloy_primitives::hex!("d21df8dc65880a8606f09fe0ce3df9b8869287ab0b058be05aa9e8af6330a00b");

@@ -13,8 +13,8 @@ use crate::{
 	error::PolyrelError,
 	sign,
 	types::{
-		Config, DeployedResponse, OperationType, RelayerInfo, RelayerTransaction, SubmitRequest,
-		SubmitResponse, WalletType,
+		Config, DeployedResponse, RelayerInfo, RelayerTransaction, SubmitRequest, SubmitResponse,
+		WalletType,
 	},
 };
 
@@ -407,12 +407,7 @@ impl From<RelayerClient<Authenticated>> for RelayerClient<Unauthenticated> {
 }
 
 fn call_tx(to: Address, data: alloy_primitives::Bytes) -> sign::SafeTransaction {
-	sign::SafeTransaction {
-		to,
-		value: U256::ZERO,
-		data: data.to_vec(),
-		operation: OperationType::Call,
-	}
+	sign::SafeTransaction::builder().to(to).data(data.to_vec()).build()
 }
 
 async fn handle_response<T: serde::de::DeserializeOwned>(

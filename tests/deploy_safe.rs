@@ -12,11 +12,13 @@ use wiremock::{
 };
 
 fn test_auth() -> Auth {
-	Auth::Builder(BuilderCredentials {
-		api_key: SecretString::from("test-key"),
-		secret: SecretString::from("dGVzdC1zZWNyZXQ="),
-		passphrase: SecretString::from("test-pass"),
-	})
+	Auth::Builder(
+		BuilderCredentials::builder()
+			.api_key(SecretString::from("test-key"))
+			.secret(SecretString::from("dGVzdC1zZWNyZXQ="))
+			.passphrase(SecretString::from("test-pass"))
+			.build(),
+	)
 }
 
 #[tokio::test]

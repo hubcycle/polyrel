@@ -299,17 +299,49 @@ pub fn neg_risk_redeem_positions(condition_id: B256, amounts: Vec<U256>) -> Byte
 /// A single Safe transaction within a MultiSend batch.
 #[derive(Debug, Clone)]
 pub struct SafeTransaction {
+	to: Address,
+	value: U256,
+	data: Vec<u8>,
+	operation: OperationType,
+}
+
+#[bon::bon]
+impl SafeTransaction {
+	/// Build a new Safe transaction. `value` defaults to zero and `operation` to `Call`.
+	#[builder]
+	pub fn new(
+		to: Address,
+		value: Option<U256>,
+		data: Vec<u8>,
+		operation: Option<OperationType>,
+	) -> Self {
+		Self {
+			to,
+			value: value.unwrap_or(U256::ZERO),
+			data,
+			operation: operation.unwrap_or(OperationType::Call),
+		}
+	}
+
 	/// Target contract.
-	pub to: Address,
+	pub fn to(&self) -> Address {
+		self.to
+	}
 
 	/// ETH value (usually zero for relayed transactions).
-	pub value: U256,
+	pub fn value(&self) -> U256 {
+		self.value
+	}
 
 	/// Encoded calldata.
-	pub data: Vec<u8>,
+	pub fn data(&self) -> &[u8] {
+		&self.data
+	}
 
 	/// Operation type.
-	pub operation: OperationType,
+	pub fn operation(&self) -> OperationType {
+		self.operation
+	}
 }
 
 /// A non-empty collection of Safe transactions.
@@ -348,23 +380,22 @@ pub fn aggregate_transactions(
 	let encoded = encode_multisend_payload(&txns);
 	let calldata = IMultiSend::multiSendCall { transactions: encoded.into() }.abi_encode();
 
-	SafeTransaction {
-		to: multisend_address,
-		value: U256::ZERO,
-		data: calldata,
-		operation: OperationType::DelegateCall,
-	}
+	SafeTransaction::builder()
+		.to(multisend_address)
+		.data(calldata)
+		.operation(OperationType::DelegateCall)
+		.build()
 }
 
 /// Encode transactions for the MultiSend contract.
 fn encode_multisend_payload(transactions: &[SafeTransaction]) -> Vec<u8> {
 	let mut encoded = Vec::new();
 	for tx in transactions {
-		encoded.push(tx.operation.as_u8());
-		encoded.extend_from_slice(tx.to.as_slice());
-		encoded.extend_from_slice(&tx.value.to_be_bytes::<32>());
-		encoded.extend_from_slice(&U256::from(tx.data.len()).to_be_bytes::<32>());
-		encoded.extend_from_slice(&tx.data);
+		encoded.push(tx.operation().as_u8());
+		encoded.extend_from_slice(tx.to().as_slice());
+		encoded.extend_from_slice(&tx.value().to_be_bytes::<32>());
+		encoded.extend_from_slice(&U256::from(tx.data().len()).to_be_bytes::<32>());
+		encoded.extend_from_slice(tx.data());
 	}
 	encoded
 }
@@ -420,10 +451,10 @@ pub fn safe_tx_hash(
 		..Default::default()
 	};
 	let safe_tx = SafeTx {
-		to: tx.to,
-		value: tx.value,
-		data: tx.data.clone().into(),
-		operation: tx.operation.as_u8(),
+		to: tx.to(),
+		value: tx.value(),
+		data: tx.data().to_vec().into(),
+		operation: tx.operation().as_u8(),
 		safeTxGas: U256::ZERO,
 		baseGas: U256::ZERO,
 		gasPrice: U256::ZERO,
@@ -460,12 +491,12 @@ pub(crate) async fn sign_safe_transaction<S: Signer + Sync>(
 	Ok(SubmitRequest::builder()
 		.wallet_type(WalletType::Safe)
 		.from(signer.address().to_string().into())
-		.to(tx.to.to_string().into())
+		.to(tx.to().to_string().into())
 		.maybe_proxy_wallet(Some(format!("{safe_address:#x}").into()))
-		.data(format!("0x{}", alloy_primitives::hex::encode(&tx.data)).into())
+		.data(format!("0x{}", alloy_primitives::hex::encode(tx.data())).into())
 		.maybe_nonce(Some(nonce.to_string().into()))
 		.signature(packed.into())
-		.signature_params(SignatureParams::safe(tx.operation.as_u8()))
+		.signature_params(SignatureParams::safe(tx.operation().as_u8()))
 		.build())
 }
 
@@ -512,20 +543,51 @@ pub(crate) async fn sign_safe_create_request<S: Signer + Sync>(
 
 /// Parameters for a Proxy wallet relay transaction.
 pub struct ProxyTransactionArgs {
+	data: Bytes,
+	nonce: Cow<'static, str>,
+	gas_price: Cow<'static, str>,
+	gas_limit: Cow<'static, str>,
+	relay_address: Address,
+}
+
+#[bon::bon]
+impl ProxyTransactionArgs {
+	/// Build new proxy transaction arguments.
+	#[builder]
+	pub fn new(
+		data: Bytes,
+		nonce: Cow<'static, str>,
+		gas_price: Cow<'static, str>,
+		gas_limit: Cow<'static, str>,
+		relay_address: Address,
+	) -> Self {
+		Self { data, nonce, gas_price, gas_limit, relay_address }
+	}
+
 	/// ABI-encoded calldata (e.g., from [`encode_proxy_calls`]).
-	pub data: Bytes,
+	pub fn data(&self) -> &Bytes {
+		&self.data
+	}
 
 	/// Transaction nonce.
-	pub nonce: Cow<'static, str>,
+	pub fn nonce(&self) -> &str {
+		&self.nonce
+	}
 
 	/// Gas price.
-	pub gas_price: Cow<'static, str>,
+	pub fn gas_price(&self) -> &str {
+		&self.gas_price
+	}
 
 	/// Gas limit.
-	pub gas_limit: Cow<'static, str>,
+	pub fn gas_limit(&self) -> &str {
+		&self.gas_limit
+	}
 
 	/// Relay worker address.
-	pub relay_address: Address,
+	pub fn relay_address(&self) -> Address {
+		self.relay_address
+	}
 }
 
 /// Sign a Proxy wallet transaction and return a ready-to-submit [`SubmitRequest`].
@@ -822,12 +884,7 @@ mod tests {
 	#[test]
 	fn non_empty_transactions_accepts_one() {
 		// Arrange
-		let tx = SafeTransaction {
-			to: Address::ZERO,
-			value: U256::ZERO,
-			data: vec![],
-			operation: OperationType::Call,
-		};
+		let tx = SafeTransaction::builder().to(Address::ZERO).data(vec![]).build();
 
 		// Act
 		let result = NonEmptyTransactions::new(vec![tx]);
@@ -995,45 +1052,30 @@ mod tests {
 	#[test]
 	fn aggregate_single_returns_directly() {
 		// Arrange
-		let tx = SafeTransaction {
-			to: Address::ZERO,
-			value: U256::ZERO,
-			data: vec![0xde, 0xad],
-			operation: OperationType::Call,
-		};
+		let tx = SafeTransaction::builder().to(Address::ZERO).data(vec![0xde, 0xad]).build();
 		let batch = NonEmptyTransactions::new(vec![tx]).unwrap();
 
 		// Act
 		let result = aggregate_transactions(batch, crate::SAFE_MULTISEND);
 
 		// Assert
-		assert_eq!(result.operation, OperationType::Call);
-		assert_eq!(result.data, vec![0xde, 0xad]);
+		assert_eq!(result.operation(), OperationType::Call);
+		assert_eq!(result.data(), &[0xde, 0xad]);
 	}
 
 	#[test]
 	fn aggregate_multiple_produces_delegate_call() {
 		// Arrange
-		let tx1 = SafeTransaction {
-			to: Address::ZERO,
-			value: U256::ZERO,
-			data: vec![0x01],
-			operation: OperationType::Call,
-		};
-		let tx2 = SafeTransaction {
-			to: Address::ZERO,
-			value: U256::ZERO,
-			data: vec![0x02],
-			operation: OperationType::Call,
-		};
+		let tx1 = SafeTransaction::builder().to(Address::ZERO).data(vec![0x01]).build();
+		let tx2 = SafeTransaction::builder().to(Address::ZERO).data(vec![0x02]).build();
 		let batch = NonEmptyTransactions::new(vec![tx1, tx2]).unwrap();
 
 		// Act
 		let result = aggregate_transactions(batch, crate::SAFE_MULTISEND);
 
 		// Assert
-		assert_eq!(result.operation, OperationType::DelegateCall);
-		assert_eq!(result.to, crate::SAFE_MULTISEND);
+		assert_eq!(result.operation(), OperationType::DelegateCall);
+		assert_eq!(result.to(), crate::SAFE_MULTISEND);
 	}
 
 	#[tokio::test]
@@ -1041,13 +1083,13 @@ mod tests {
 		// Arrange
 		let signer = alloy_signer_local::PrivateKeySigner::random();
 		let config = crate::types::Config::builder().build().unwrap();
-		let args = ProxyTransactionArgs {
-			data: Bytes::from(vec![0xde, 0xad]),
-			nonce: "1".into(),
-			gas_price: "0".into(),
-			gas_limit: "0".into(),
-			relay_address: Address::ZERO,
-		};
+		let args = ProxyTransactionArgs::builder()
+			.data(Bytes::from(vec![0xde, 0xad]))
+			.nonce("1".into())
+			.gas_price("0".into())
+			.gas_limit("0".into())
+			.relay_address(Address::ZERO)
+			.build();
 
 		// Act
 		let result = sign_proxy_transaction(&signer, &config, args).await;
