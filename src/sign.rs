@@ -714,12 +714,17 @@ fn proxy_struct_hash(
 #[cfg(test)]
 mod tests {
 	use super::*;
+	use rstest::rstest;
 
-	#[test]
-	fn pack_adjusts_v0_to_31() {
-		// Arrange — 64 bytes of r+s then v=0
+	#[rstest]
+	#[case(0, 31)]
+	#[case(1, 32)]
+	#[case(27, 31)]
+	#[case(28, 32)]
+	fn pack_adjusts_v_byte(#[case] input_v: u8, #[case] expected: u8) {
+		// Arrange
 		let mut sig = vec![0xaa; 64];
-		sig.push(0);
+		sig.push(input_v);
 		let hex = alloy_primitives::hex::encode(&sig);
 
 		// Act
@@ -727,52 +732,7 @@ mod tests {
 
 		// Assert
 		let bytes = alloy_primitives::hex::decode(packed.strip_prefix("0x").unwrap()).unwrap();
-		assert_eq!(bytes[64], 31);
-	}
-
-	#[test]
-	fn pack_adjusts_v1_to_32() {
-		// Arrange
-		let mut sig = vec![0xbb; 64];
-		sig.push(1);
-		let hex = alloy_primitives::hex::encode(&sig);
-
-		// Act
-		let packed = pack_safe_signature(&hex).unwrap();
-
-		// Assert
-		let bytes = alloy_primitives::hex::decode(packed.strip_prefix("0x").unwrap()).unwrap();
-		assert_eq!(bytes[64], 32);
-	}
-
-	#[test]
-	fn pack_adjusts_v27_to_31() {
-		// Arrange
-		let mut sig = vec![0xcc; 64];
-		sig.push(27);
-		let hex = alloy_primitives::hex::encode(&sig);
-
-		// Act
-		let packed = pack_safe_signature(&hex).unwrap();
-
-		// Assert
-		let bytes = alloy_primitives::hex::decode(packed.strip_prefix("0x").unwrap()).unwrap();
-		assert_eq!(bytes[64], 31);
-	}
-
-	#[test]
-	fn pack_adjusts_v28_to_32() {
-		// Arrange
-		let mut sig = vec![0xdd; 64];
-		sig.push(28);
-		let hex = alloy_primitives::hex::encode(&sig);
-
-		// Act
-		let packed = pack_safe_signature(&hex).unwrap();
-
-		// Assert
-		let bytes = alloy_primitives::hex::decode(packed.strip_prefix("0x").unwrap()).unwrap();
-		assert_eq!(bytes[64], 32);
+		assert_eq!(bytes[64], expected);
 	}
 
 	#[test]

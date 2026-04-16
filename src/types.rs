@@ -581,37 +581,14 @@ mod tests {
 		assert!(config.is_ok());
 	}
 
-	#[test]
-	fn config_rejects_ftp_scheme() {
+	#[rstest::rstest]
+	#[case("ftp://example.com")]
+	#[case("mailto:test@example.com")]
+	#[case("https://example.com?key=val")]
+	#[case("https://example.com#frag")]
+	fn config_rejects_invalid_url(#[case] url: &str) {
 		// Act
-		let result = Config::builder().base_url("ftp://example.com".into()).build();
-
-		// Assert
-		assert!(result.is_err());
-	}
-
-	#[test]
-	fn config_rejects_mailto_scheme() {
-		// Act
-		let result = Config::builder().base_url("mailto:test@example.com".into()).build();
-
-		// Assert
-		assert!(result.is_err());
-	}
-
-	#[test]
-	fn config_rejects_query_string() {
-		// Act
-		let result = Config::builder().base_url("https://example.com?key=val".into()).build();
-
-		// Assert
-		assert!(result.is_err());
-	}
-
-	#[test]
-	fn config_rejects_fragment() {
-		// Act
-		let result = Config::builder().base_url("https://example.com#frag".into()).build();
+		let result = Config::builder().base_url(Cow::Owned(url.to_owned())).build();
 
 		// Assert
 		assert!(result.is_err());
