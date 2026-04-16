@@ -58,7 +58,7 @@ impl RelayerClient<Unauthenticated> {
 	#[builder]
 	pub fn new(
 		base_url: Option<Cow<'static, str>>,
-		chain_id: Option<u64>,
+		chain_id: Option<crate::types::ChainId>,
 		ctf_exchange: Option<Address>,
 		neg_risk_ctf_exchange: Option<Address>,
 		neg_risk_adapter: Option<Address>,

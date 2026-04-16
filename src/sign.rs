@@ -1,20 +1,18 @@
 //! Transaction signing helpers, calldata builders, and wallet derivation.
 
-use std::borrow::Cow;
-
 use alloy_primitives::{Address, B256, Bytes, U256, keccak256};
 use alloy_signer::Signer;
 use alloy_sol_types::{SolCall, SolStruct, sol};
 
 use crate::{
 	PolyrelError,
-	types::{Config, OperationType, SignatureParams, SubmitRequest, WalletType},
+	types::{
+		Config, GasLimit, GasPrice, Nonce, OperationType, SignatureParams, SubmitRequest,
+		WalletType,
+	},
 };
 
-const FIELD_TX_FEE: &str = "tx_fee";
-const FIELD_GAS_PRICE: &str = "gas_price";
-const FIELD_GAS_LIMIT: &str = "gas_limit";
-const FIELD_NONCE: &str = "nonce";
+const PROXY_CALL_TYPE_CALL: u8 = 1;
 
 sol! {
 	/// Gnosis Safe transaction for EIP-712 signing.
@@ -111,29 +109,6 @@ sol! {
 	/// Proxy Wallet Factory `proxy()` function.
 	interface IProxyWalletFactory {
 		function proxy(ProxyCall[] calls) external payable returns (bytes[]);
-	}
-}
-
-/// Target contract and encoded calldata pair.
-pub type Call = (Address, Bytes);
-
-/// Proxy call type codes.
-const PROXY_CALL_TYPE_CALL: u8 = 1;
-
-/// A non-empty collection of proxy calls.
-///
-/// Constructed via [`NonEmptyProxyCalls::new`], which rejects empty input.
-pub struct NonEmptyProxyCalls(Vec<(Address, Bytes)>);
-
-impl NonEmptyProxyCalls {
-	/// Create from a non-empty vector of `(target, calldata)` pairs.
-	///
-	/// Returns `None` if `calls` is empty.
-	pub fn new(calls: Vec<(Address, Bytes)>) -> Option<Self> {
-		if calls.is_empty() {
-			return None;
-		}
-		Some(Self(calls))
 	}
 }
 
@@ -296,6 +271,157 @@ pub fn neg_risk_redeem_positions(condition_id: B256, amounts: Vec<U256>) -> Byte
 	)
 }
 
+/// Aggregate a batch of Safe transactions into one.
+///
+/// Returns a single transaction directly when only one is provided.
+/// Otherwise encodes as a MultiSend delegate call.
+pub fn aggregate_transactions(
+	transactions: NonEmptyTransactions,
+	multisend_address: Address,
+) -> SafeTransaction {
+	let txns = transactions.into_inner();
+	if txns.len() == 1 {
+		return txns.into_iter().next().expect("non-empty");
+	}
+
+	let encoded = encode_multisend_payload(&txns);
+	let calldata = IMultiSend::multiSendCall { transactions: encoded.into() }.abi_encode();
+
+	SafeTransaction::builder()
+		.to(multisend_address)
+		.data(calldata)
+		.operation(OperationType::DelegateCall)
+		.build()
+}
+
+/// Derive the deterministic Safe wallet address for an owner.
+pub fn derive_safe_address(owner: Address, safe_factory: Address, init_code_hash: B256) -> Address {
+	let encoded = {
+		let mut buf = [0u8; 32];
+		buf[12..].copy_from_slice(owner.as_slice());
+		buf
+	};
+	let salt = keccak256(encoded);
+	create2_address(safe_factory, salt, init_code_hash)
+}
+
+/// Derive the deterministic Proxy wallet address for an owner.
+pub fn derive_proxy_address(
+	owner: Address,
+	proxy_factory: Address,
+	init_code_hash: B256,
+) -> Address {
+	let salt = keccak256(owner.as_slice());
+	create2_address(proxy_factory, salt, init_code_hash)
+}
+
+/// Compute the EIP-712 Safe transaction hash.
+///
+/// The returned hash must be signed with `signer.sign_message(hash.as_slice())`
+/// (EIP-191 personal_sign), **not** `sign_hash`. The resulting signature must
+/// then be packed via [`pack_safe_signature`] before submission. For most
+/// use cases, prefer [`crate::RelayerClient::sign_and_submit_safe`] which handles
+/// this sequence automatically.
+pub fn safe_tx_hash(
+	chain_id: u64,
+	safe_address: Address,
+	tx: &SafeTransaction,
+	nonce: U256,
+) -> B256 {
+	let domain = alloy_sol_types::Eip712Domain {
+		chain_id: Some(U256::from(chain_id)),
+		verifying_contract: Some(safe_address),
+		..Default::default()
+	};
+	let safe_tx = SafeTx {
+		to: tx.to(),
+		value: tx.value(),
+		data: tx.data().to_vec().into(),
+		operation: tx.operation().as_u8(),
+		safeTxGas: U256::ZERO,
+		baseGas: U256::ZERO,
+		gasPrice: U256::ZERO,
+		gasToken: Address::ZERO,
+		refundReceiver: Address::ZERO,
+		nonce,
+	};
+	safe_tx.eip712_signing_hash(&domain)
+}
+
+/// Sign a Proxy wallet transaction and return a ready-to-submit [`SubmitRequest`].
+pub async fn sign_proxy_transaction<S: Signer + Sync>(
+	signer: &S,
+	config: &Config,
+	args: ProxyTransactionArgs,
+) -> Result<SubmitRequest, PolyrelError> {
+	let factory = config.proxy_wallet_factory();
+	let proxy_address =
+		derive_proxy_address(signer.address(), factory, config.proxy_init_code_hash());
+	let struct_hash = proxy_struct_hash(
+		signer.address(),
+		factory,
+		&args.data,
+		U256::ZERO,
+		args.gas_price.raw(),
+		args.gas_limit.raw(),
+		args.nonce.raw(),
+		config.relay_hub(),
+		args.relay_address,
+	);
+
+	let signature = signer
+		.sign_message(struct_hash.as_slice())
+		.await
+		.map_err(|e| PolyrelError::signing(e.to_string()))?;
+
+	Ok(SubmitRequest::builder()
+		.wallet_type(WalletType::Proxy)
+		.from(signer.address().to_string().into())
+		.to(factory.to_string().into())
+		.maybe_proxy_wallet(Some(proxy_address.to_string().into()))
+		.data(format!("0x{}", alloy_primitives::hex::encode(&args.data)).into())
+		.maybe_nonce(Some(args.nonce.raw().to_string().into()))
+		.signature(format!("0x{}", alloy_primitives::hex::encode(signature.as_bytes())).into())
+		.signature_params(SignatureParams::proxy(
+			args.gas_price,
+			args.gas_limit,
+			config.relay_hub(),
+			args.relay_address,
+		))
+		.build())
+}
+
+/// Pack a signature into Safe's expected format.
+///
+/// Adjusts the v byte: `0/1 → +31`, `27/28 → +4`.
+pub fn pack_safe_signature(sig_hex: &str) -> Result<String, PolyrelError> {
+	let raw = sig_hex.strip_prefix("0x").unwrap_or(sig_hex);
+	let mut bytes = alloy_primitives::hex::decode(raw)
+		.map_err(|_| PolyrelError::invalid_signature("hex decode failed"))?;
+
+	const EXPECTED_LEN: usize = 65;
+	if bytes.len() != EXPECTED_LEN {
+		return Err(PolyrelError::invalid_signature(
+			"signature must be 65 bytes",
+		));
+	}
+
+	bytes[64] = match bytes[64] {
+		0 | 1 => bytes[64] + 31,
+		27 | 28 => bytes[64] + 4,
+		_ => {
+			return Err(PolyrelError::invalid_signature(
+				"invalid v value in signature",
+			));
+		},
+	};
+
+	Ok(format!("0x{}", alloy_primitives::hex::encode(bytes)))
+}
+
+/// Target contract and encoded calldata pair.
+pub type Call = (Address, Bytes);
+
 /// A single Safe transaction within a MultiSend batch.
 #[derive(Debug, Clone)]
 pub struct SafeTransaction {
@@ -303,6 +429,25 @@ pub struct SafeTransaction {
 	value: U256,
 	data: Vec<u8>,
 	operation: OperationType,
+}
+
+/// A non-empty collection of Safe transactions.
+///
+/// Constructed via [`NonEmptyTransactions::new`], which rejects empty input.
+pub struct NonEmptyTransactions(Vec<SafeTransaction>);
+
+/// A non-empty collection of proxy calls.
+///
+/// Constructed via [`NonEmptyProxyCalls::new`], which rejects empty input.
+pub struct NonEmptyProxyCalls(Vec<(Address, Bytes)>);
+
+/// Parameters for a Proxy wallet relay transaction.
+pub struct ProxyTransactionArgs {
+	data: Bytes,
+	nonce: Nonce,
+	gas_price: GasPrice,
+	gas_limit: GasLimit,
+	relay_address: Address,
 }
 
 #[bon::bon]
@@ -344,11 +489,6 @@ impl SafeTransaction {
 	}
 }
 
-/// A non-empty collection of Safe transactions.
-///
-/// Constructed via [`NonEmptyTransactions::new`], which rejects empty input.
-pub struct NonEmptyTransactions(Vec<SafeTransaction>);
-
 impl NonEmptyTransactions {
 	/// Create from a non-empty vector.
 	pub fn new(transactions: Vec<SafeTransaction>) -> Result<Self, PolyrelError> {
@@ -364,30 +504,58 @@ impl NonEmptyTransactions {
 	}
 }
 
-/// Aggregate a batch of Safe transactions into one.
-///
-/// Returns a single transaction directly when only one is provided.
-/// Otherwise encodes as a MultiSend delegate call.
-pub fn aggregate_transactions(
-	transactions: NonEmptyTransactions,
-	multisend_address: Address,
-) -> SafeTransaction {
-	let txns = transactions.into_inner();
-	if txns.len() == 1 {
-		return txns.into_iter().next().expect("non-empty");
+impl NonEmptyProxyCalls {
+	/// Create from a non-empty vector of `(target, calldata)` pairs.
+	///
+	/// Returns `None` if `calls` is empty.
+	pub fn new(calls: Vec<(Address, Bytes)>) -> Option<Self> {
+		if calls.is_empty() {
+			return None;
+		}
+		Some(Self(calls))
 	}
-
-	let encoded = encode_multisend_payload(&txns);
-	let calldata = IMultiSend::multiSendCall { transactions: encoded.into() }.abi_encode();
-
-	SafeTransaction::builder()
-		.to(multisend_address)
-		.data(calldata)
-		.operation(OperationType::DelegateCall)
-		.build()
 }
 
-/// Encode transactions for the MultiSend contract.
+#[bon::bon]
+impl ProxyTransactionArgs {
+	/// Build new proxy transaction arguments.
+	#[builder]
+	pub fn new(
+		data: Bytes,
+		nonce: Nonce,
+		gas_price: GasPrice,
+		gas_limit: GasLimit,
+		relay_address: Address,
+	) -> Self {
+		Self { data, nonce, gas_price, gas_limit, relay_address }
+	}
+
+	/// ABI-encoded calldata (e.g., from [`encode_proxy_calls`]).
+	pub fn data(&self) -> &Bytes {
+		&self.data
+	}
+
+	/// Transaction nonce.
+	pub fn nonce(&self) -> Nonce {
+		self.nonce
+	}
+
+	/// Gas price.
+	pub fn gas_price(&self) -> GasPrice {
+		self.gas_price
+	}
+
+	/// Gas limit.
+	pub fn gas_limit(&self) -> GasLimit {
+		self.gas_limit
+	}
+
+	/// Relay worker address.
+	pub fn relay_address(&self) -> Address {
+		self.relay_address
+	}
+}
+
 fn encode_multisend_payload(transactions: &[SafeTransaction]) -> Vec<u8> {
 	let mut encoded = Vec::new();
 	for tx in transactions {
@@ -400,28 +568,6 @@ fn encode_multisend_payload(transactions: &[SafeTransaction]) -> Vec<u8> {
 	encoded
 }
 
-/// Derive the deterministic Safe wallet address for an owner.
-pub fn derive_safe_address(owner: Address, safe_factory: Address, init_code_hash: B256) -> Address {
-	let encoded = {
-		let mut buf = [0u8; 32];
-		buf[12..].copy_from_slice(owner.as_slice());
-		buf
-	};
-	let salt = keccak256(encoded);
-	create2_address(safe_factory, salt, init_code_hash)
-}
-
-/// Derive the deterministic Proxy wallet address for an owner.
-pub fn derive_proxy_address(
-	owner: Address,
-	proxy_factory: Address,
-	init_code_hash: B256,
-) -> Address {
-	let salt = keccak256(owner.as_slice());
-	create2_address(proxy_factory, salt, init_code_hash)
-}
-
-/// Compute a CREATE2 address.
 fn create2_address(deployer: Address, salt: B256, init_code_hash: B256) -> Address {
 	let mut buf = [0u8; 1 + 20 + 32 + 32];
 	buf[0] = 0xff;
@@ -430,39 +576,6 @@ fn create2_address(deployer: Address, salt: B256, init_code_hash: B256) -> Addre
 	buf[53..85].copy_from_slice(init_code_hash.as_slice());
 	let hash = keccak256(buf);
 	Address::from_slice(&hash[12..])
-}
-
-/// Compute the EIP-712 Safe transaction hash.
-///
-/// The returned hash must be signed with `signer.sign_message(hash.as_slice())`
-/// (EIP-191 personal_sign), **not** `sign_hash`. The resulting signature must
-/// then be packed via [`pack_safe_signature`] before submission. For most
-/// use cases, prefer [`crate::RelayerClient::sign_and_submit_safe`] which handles
-/// this sequence automatically.
-pub fn safe_tx_hash(
-	chain_id: u64,
-	safe_address: Address,
-	tx: &SafeTransaction,
-	nonce: U256,
-) -> B256 {
-	let domain = alloy_sol_types::Eip712Domain {
-		chain_id: Some(U256::from(chain_id)),
-		verifying_contract: Some(safe_address),
-		..Default::default()
-	};
-	let safe_tx = SafeTx {
-		to: tx.to(),
-		value: tx.value(),
-		data: tx.data().to_vec().into(),
-		operation: tx.operation().as_u8(),
-		safeTxGas: U256::ZERO,
-		baseGas: U256::ZERO,
-		gasPrice: U256::ZERO,
-		gasToken: Address::ZERO,
-		refundReceiver: Address::ZERO,
-		nonce,
-	};
-	safe_tx.eip712_signing_hash(&domain)
 }
 
 /// Sign a Safe transaction and return a ready-to-submit [`SubmitRequest`].
@@ -479,7 +592,7 @@ pub(crate) async fn sign_safe_transaction<S: Signer + Sync>(
 		config.safe_factory(),
 		config.safe_init_code_hash(),
 	);
-	let signing_hash = safe_tx_hash(config.chain_id(), safe_address, &tx, nonce);
+	let signing_hash = safe_tx_hash(config.chain_id().raw(), safe_address, &tx, nonce);
 
 	let signature = signer
 		.sign_message(signing_hash.as_slice())
@@ -516,7 +629,7 @@ pub(crate) async fn sign_safe_create_request<S: Signer + Sync>(
 
 	let domain = alloy_sol_types::Eip712Domain {
 		name: Some(crate::SAFE_FACTORY_NAME.into()),
-		chain_id: Some(U256::from(config.chain_id())),
+		chain_id: Some(U256::from(config.chain_id().raw())),
 		verifying_contract: Some(config.safe_factory()),
 		..Default::default()
 	};
@@ -541,174 +654,31 @@ pub(crate) async fn sign_safe_create_request<S: Signer + Sync>(
 		.build())
 }
 
-/// Parameters for a Proxy wallet relay transaction.
-pub struct ProxyTransactionArgs {
-	data: Bytes,
-	nonce: Cow<'static, str>,
-	gas_price: Cow<'static, str>,
-	gas_limit: Cow<'static, str>,
-	relay_address: Address,
-}
-
-#[bon::bon]
-impl ProxyTransactionArgs {
-	/// Build new proxy transaction arguments.
-	#[builder]
-	pub fn new(
-		data: Bytes,
-		nonce: Cow<'static, str>,
-		gas_price: Cow<'static, str>,
-		gas_limit: Cow<'static, str>,
-		relay_address: Address,
-	) -> Self {
-		Self { data, nonce, gas_price, gas_limit, relay_address }
-	}
-
-	/// ABI-encoded calldata (e.g., from [`encode_proxy_calls`]).
-	pub fn data(&self) -> &Bytes {
-		&self.data
-	}
-
-	/// Transaction nonce.
-	pub fn nonce(&self) -> &str {
-		&self.nonce
-	}
-
-	/// Gas price.
-	pub fn gas_price(&self) -> &str {
-		&self.gas_price
-	}
-
-	/// Gas limit.
-	pub fn gas_limit(&self) -> &str {
-		&self.gas_limit
-	}
-
-	/// Relay worker address.
-	pub fn relay_address(&self) -> Address {
-		self.relay_address
-	}
-}
-
-/// Sign a Proxy wallet transaction and return a ready-to-submit [`SubmitRequest`].
-pub async fn sign_proxy_transaction<S: Signer + Sync>(
-	signer: &S,
-	config: &Config,
-	args: ProxyTransactionArgs,
-) -> Result<SubmitRequest, PolyrelError> {
-	let gas_limit = parse_u256(&args.gas_limit, FIELD_GAS_LIMIT)?;
-	if gas_limit.is_zero() {
-		return Err(PolyrelError::InvalidNumericField {
-			field: FIELD_GAS_LIMIT,
-			value: Cow::Borrowed("0"),
-		});
-	}
-	let factory = config.proxy_wallet_factory();
-	let proxy_address =
-		derive_proxy_address(signer.address(), factory, config.proxy_init_code_hash());
-	let struct_hash = proxy_struct_hash(
-		signer.address(),
-		factory,
-		&args.data,
-		"0",
-		&args.gas_price,
-		&args.gas_limit,
-		&args.nonce,
-		config.relay_hub(),
-		args.relay_address,
-	)?;
-
-	let signature = signer
-		.sign_message(struct_hash.as_slice())
-		.await
-		.map_err(|e| PolyrelError::signing(e.to_string()))?;
-
-	Ok(SubmitRequest::builder()
-		.wallet_type(WalletType::Proxy)
-		.from(signer.address().to_string().into())
-		.to(factory.to_string().into())
-		.maybe_proxy_wallet(Some(proxy_address.to_string().into()))
-		.data(format!("0x{}", alloy_primitives::hex::encode(&args.data)).into())
-		.maybe_nonce(Some(args.nonce))
-		.signature(format!("0x{}", alloy_primitives::hex::encode(signature.as_bytes())).into())
-		.signature_params(SignatureParams::proxy(
-			args.gas_price,
-			args.gas_limit,
-			config.relay_hub(),
-			args.relay_address,
-		))
-		.build())
-}
-
-/// Pack a signature into Safe's expected format.
-///
-/// Adjusts the v byte: `0/1 → +31`, `27/28 → +4`.
-pub fn pack_safe_signature(sig_hex: &str) -> Result<String, PolyrelError> {
-	let raw = sig_hex.strip_prefix("0x").unwrap_or(sig_hex);
-	let mut bytes = alloy_primitives::hex::decode(raw)
-		.map_err(|_| PolyrelError::invalid_signature("hex decode failed"))?;
-
-	const EXPECTED_LEN: usize = 65;
-	if bytes.len() != EXPECTED_LEN {
-		return Err(PolyrelError::invalid_signature(
-			"signature must be 65 bytes",
-		));
-	}
-
-	bytes[64] = match bytes[64] {
-		0 | 1 => bytes[64] + 31,
-		27 | 28 => bytes[64] + 4,
-		_ => {
-			return Err(PolyrelError::invalid_signature(
-				"invalid v value in signature",
-			));
-		},
-	};
-
-	Ok(format!("0x{}", alloy_primitives::hex::encode(bytes)))
-}
-
-/// Build a Proxy-wallet struct hash for signing.
-///
-/// Concatenates: `"rlx:" ++ from ++ to ++ data ++ txFee(32) ++ gasPrice(32)
-/// ++ gasLimit(32) ++ nonce(32) ++ relayHub ++ relay`.
-fn parse_u256(value: &str, field: &'static str) -> Result<U256, PolyrelError> {
-	value.parse::<U256>().map_err(|_| PolyrelError::InvalidNumericField {
-		field,
-		value: Cow::Owned(value.to_owned()),
-	})
-}
-
 #[allow(clippy::too_many_arguments)]
 fn proxy_struct_hash(
 	from: Address,
 	to: Address,
 	data: &[u8],
-	tx_fee: &str,
-	gas_price: &str,
-	gas_limit: &str,
-	nonce: &str,
+	tx_fee: U256,
+	gas_price: U256,
+	gas_limit: U256,
+	nonce: U256,
 	relay_hub: Address,
 	relay_address: Address,
-) -> Result<B256, PolyrelError> {
+) -> B256 {
 	let prefix = b"rlx:";
-	let tx_fee_u256 = parse_u256(tx_fee, FIELD_TX_FEE)?;
-	let gas_price_u256 = parse_u256(gas_price, FIELD_GAS_PRICE)?;
-	let gas_limit_u256 = parse_u256(gas_limit, FIELD_GAS_LIMIT)?;
-	let nonce_u256 = parse_u256(nonce, FIELD_NONCE)?;
-
 	let mut buf = Vec::new();
 	buf.extend_from_slice(prefix);
 	buf.extend_from_slice(from.as_slice());
 	buf.extend_from_slice(to.as_slice());
 	buf.extend_from_slice(data);
-	buf.extend_from_slice(&tx_fee_u256.to_be_bytes::<32>());
-	buf.extend_from_slice(&gas_price_u256.to_be_bytes::<32>());
-	buf.extend_from_slice(&gas_limit_u256.to_be_bytes::<32>());
-	buf.extend_from_slice(&nonce_u256.to_be_bytes::<32>());
+	buf.extend_from_slice(&tx_fee.to_be_bytes::<32>());
+	buf.extend_from_slice(&gas_price.to_be_bytes::<32>());
+	buf.extend_from_slice(&gas_limit.to_be_bytes::<32>());
+	buf.extend_from_slice(&nonce.to_be_bytes::<32>());
 	buf.extend_from_slice(relay_hub.as_slice());
 	buf.extend_from_slice(relay_address.as_slice());
-	Ok(keccak256(&buf))
+	keccak256(&buf)
 }
 
 #[cfg(test)]
@@ -776,60 +746,33 @@ mod tests {
 	}
 
 	#[test]
-	fn proxy_struct_hash_rejects_invalid_nonce() {
+	fn proxy_struct_hash_produces_deterministic_output() {
 		// Act
-		let result = proxy_struct_hash(
-			Address::ZERO,
-			Address::ZERO,
-			&[],
-			"0",
-			"0",
-			"1000000",
-			"not_a_number",
-			Address::ZERO,
-			Address::ZERO,
-		);
-
-		// Assert
-		assert!(result.is_err());
-	}
-
-	#[test]
-	fn proxy_struct_hash_rejects_invalid_gas_limit() {
-		// Act
-		let result = proxy_struct_hash(
-			Address::ZERO,
-			Address::ZERO,
-			&[],
-			"0",
-			"0",
-			"abc",
-			"0",
-			Address::ZERO,
-			Address::ZERO,
-		);
-
-		// Assert
-		assert!(result.is_err());
-	}
-
-	#[test]
-	fn proxy_struct_hash_accepts_valid_inputs() {
-		// Act
-		let result = proxy_struct_hash(
+		let a = proxy_struct_hash(
 			Address::ZERO,
 			Address::ZERO,
 			&[0xde, 0xad],
-			"0",
-			"0",
-			"10000000",
-			"42",
+			U256::ZERO,
+			U256::ZERO,
+			U256::from(10_000_000),
+			U256::from(42),
+			Address::ZERO,
+			Address::ZERO,
+		);
+		let b = proxy_struct_hash(
+			Address::ZERO,
+			Address::ZERO,
+			&[0xde, 0xad],
+			U256::ZERO,
+			U256::ZERO,
+			U256::from(10_000_000),
+			U256::from(42),
 			Address::ZERO,
 			Address::ZERO,
 		);
 
 		// Assert
-		assert!(result.is_ok());
+		assert_eq!(a, b);
 	}
 
 	#[test]
@@ -957,14 +900,11 @@ mod tests {
 		// Act
 		let (target, data) = usdc_approve_conditional_tokens(&config, amount);
 
-		// Assert: target is USDC.e
+		// Assert
 		assert_eq!(target, config.usdc_e());
-		// Assert: selector is approve(address,uint256)
 		assert_eq!(&data[..4], &[0x09, 0x5e, 0xa7, 0xb3]);
-		// Assert: spender is conditional_tokens (bytes 4..36, left-padded address)
 		let spender = Address::from_slice(&data[16..36]);
 		assert_eq!(spender, config.conditional_tokens());
-		// Assert: amount is 100 (bytes 36..68)
 		let encoded_amount = U256::from_be_slice(&data[36..68]);
 		assert_eq!(encoded_amount, amount);
 	}
@@ -978,14 +918,11 @@ mod tests {
 		// Act
 		let (target, data) = usdc_approve_neg_risk_adapter(&config, amount);
 
-		// Assert: target is USDC.e
+		// Assert
 		assert_eq!(target, config.usdc_e());
-		// Assert: selector is approve(address,uint256)
 		assert_eq!(&data[..4], &[0x09, 0x5e, 0xa7, 0xb3]);
-		// Assert: spender is neg_risk_adapter
 		let spender = Address::from_slice(&data[16..36]);
 		assert_eq!(spender, config.neg_risk_adapter());
-		// Assert: amount is 42
 		let encoded_amount = U256::from_be_slice(&data[36..68]);
 		assert_eq!(encoded_amount, amount);
 	}
@@ -998,14 +935,11 @@ mod tests {
 		// Act
 		let (target, data) = ctf_approve_neg_risk_adapter(&config);
 
-		// Assert: target is conditional_tokens
+		// Assert
 		assert_eq!(target, config.conditional_tokens());
-		// Assert: selector is setApprovalForAll(address,bool)
 		assert_eq!(&data[..4], &[0xa2, 0x2c, 0xb4, 0x65]);
-		// Assert: operator is neg_risk_adapter
 		let operator = Address::from_slice(&data[16..36]);
 		assert_eq!(operator, config.neg_risk_adapter());
-		// Assert: approved is true (bytes 36..68, last byte is 1)
 		assert_eq!(data[67], 1);
 	}
 
@@ -1036,29 +970,6 @@ mod tests {
 		// Assert
 		assert_eq!(result.operation(), OperationType::DelegateCall);
 		assert_eq!(result.to(), crate::SAFE_MULTISEND);
-	}
-
-	#[tokio::test]
-	async fn sign_proxy_transaction_rejects_zero_gas_limit() {
-		// Arrange
-		let signer = alloy_signer_local::PrivateKeySigner::random();
-		let config = crate::types::Config::builder().build().unwrap();
-		let args = ProxyTransactionArgs::builder()
-			.data(Bytes::from(vec![0xde, 0xad]))
-			.nonce("1".into())
-			.gas_price("0".into())
-			.gas_limit("0".into())
-			.relay_address(Address::ZERO)
-			.build();
-
-		// Act
-		let result = sign_proxy_transaction(&signer, &config, args).await;
-
-		// Assert
-		assert!(matches!(
-			result,
-			Err(PolyrelError::InvalidNumericField { field: FIELD_GAS_LIMIT, .. })
-		));
 	}
 
 	#[tokio::test]

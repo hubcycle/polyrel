@@ -38,7 +38,7 @@
 //!
 //! let client = RelayerClient::builder()
 //!     .base_url("https://relayer-testnet.example.com".into())
-//!     .chain_id(80002_u64)
+//!     .chain_id(polyrel::ChainId::new(80002))
 //!     .safe_factory(address!("aacFeEa03eb1561C4e67d661e40682Bd20E3541b"))
 //!     .safe_multisend(address!("A238CBeb142c10Ef7Ad8442C6D1f9E89e07e7761"))
 //!     .safe_init_code_hash(B256::from(polyrel::SAFE_INIT_CODE_HASH))
@@ -78,7 +78,7 @@
 //! use polyrel::Config;
 //!
 //! let config = Config::builder().build().unwrap();
-//! assert_eq!(config.chain_id(), 137);
+//! assert_eq!(config.chain_id().raw(), 137);
 //! assert_eq!(config.base_url().scheme(), "https");
 //! ```
 //!
@@ -188,9 +188,9 @@ pub use sign::{
 	usdc_approve_neg_risk_exchange, usdc_transfer,
 };
 pub use types::{
-	Config, DeployedResponse, KnownTransactionState, Nonce, OperationType, RelayerInfo,
-	RelayerTransaction, SignatureParams, SubmitRequest, SubmitResponse, TransactionId,
-	TransactionState, WalletType,
+	ChainId, Config, DeployedResponse, GasLimit, GasPrice, KnownTransactionState, Nonce,
+	OperationType, RelayerInfo, RelayerTransaction, SignatureParams, SubmitRequest, SubmitResponse,
+	TransactionId, TransactionState, WalletType,
 };
 
 use alloy_primitives::{Address, address};
