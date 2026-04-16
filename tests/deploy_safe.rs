@@ -94,6 +94,6 @@ async fn deploy_safe_submits_when_safe_not_deployed() {
 
 	// Assert
 	let resp = result.unwrap();
-	assert_eq!(resp.transaction_id, "tx-deploy-123");
-	assert_eq!(resp.state, "STATE_NEW");
+	assert_eq!(resp.transaction_id.as_str(), "tx-deploy-123");
+	assert!(resp.state.is(polyrel::KnownTransactionState::New));
 }

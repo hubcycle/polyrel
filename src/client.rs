@@ -7,14 +7,15 @@ use std::borrow::Cow;
 use alloy_primitives::{Address, B256, U256};
 use alloy_signer::Signer;
 use reqwest::{StatusCode, header::CONTENT_TYPE};
+use serde::Deserialize;
 
 use crate::{
 	auth::Auth,
 	error::PolyrelError,
 	sign,
 	types::{
-		Config, DeployedResponse, RelayerInfo, RelayerTransaction, SubmitRequest, SubmitResponse,
-		WalletType,
+		Config, DeployedResponse, KnownTransactionState, Nonce, RelayerInfo, RelayerTransaction,
+		SubmitRequest, SubmitResponse, TransactionId, WalletType,
 	},
 };
 
@@ -98,19 +99,22 @@ impl RelayerClient<Unauthenticated> {
 
 impl<S> RelayerClient<S> {
 	/// Query transaction status by ID. Returns a list of transaction records.
-	pub async fn transaction(&self, id: &str) -> Result<Vec<RelayerTransaction>, PolyrelError> {
+	pub async fn transaction(
+		&self,
+		id: &TransactionId,
+	) -> Result<Vec<RelayerTransaction>, PolyrelError> {
 		let url = self.endpoint(PATH_TRANSACTION);
-		let resp = self.http.get(url).query(&[(QUERY_ID, id)]).send().await?;
+		let resp = self.http.get(url).query(&[(QUERY_ID, id.as_str())]).send().await?;
 		handle_response(resp).await
 	}
 
 	/// Get the current nonce for a signer's Safe wallet.
-	pub async fn safe_nonce(&self, signer_address: Address) -> Result<String, PolyrelError> {
+	pub async fn safe_nonce(&self, signer_address: Address) -> Result<Nonce, PolyrelError> {
 		self.nonce_for(signer_address, NONCE_TYPE_SAFE).await
 	}
 
 	/// Get the current nonce for a signer's Proxy wallet.
-	pub async fn proxy_nonce(&self, signer_address: Address) -> Result<String, PolyrelError> {
+	pub async fn proxy_nonce(&self, signer_address: Address) -> Result<Nonce, PolyrelError> {
 		self.nonce_for(signer_address, NONCE_TYPE_PROXY).await
 	}
 
@@ -151,9 +155,9 @@ impl<S> RelayerClient<S> {
 	/// the fail state is hit or polling times out.
 	pub async fn poll_until_state(
 		&self,
-		transaction_id: &str,
-		target_states: &[&str],
-		fail_state: Option<&str>,
+		transaction_id: &TransactionId,
+		target_states: &[KnownTransactionState],
+		fail_state: Option<KnownTransactionState>,
 		max_polls: Option<u32>,
 		poll_interval: Option<Duration>,
 	) -> Result<Option<RelayerTransaction>, PolyrelError> {
@@ -165,10 +169,10 @@ impl<S> RelayerClient<S> {
 		for i in 0..max {
 			let txns = self.transaction(transaction_id).await?;
 			if let Some(txn) = txns.into_iter().next() {
-				if target_states.iter().any(|s| *s == txn.state) {
+				if target_states.iter().any(|s| txn.state.is(*s)) {
 					return Ok(Some(txn));
 				}
-				if fail_state.is_some_and(|fs| fs == txn.state) {
+				if fail_state.is_some_and(|fs| txn.state.is(fs)) {
 					return Ok(None);
 				}
 			}
@@ -189,7 +193,12 @@ impl<S> RelayerClient<S> {
 		&self,
 		signer_address: Address,
 		wallet_type: &str,
-	) -> Result<String, PolyrelError> {
+	) -> Result<Nonce, PolyrelError> {
+		#[derive(Deserialize)]
+		struct NonceResponse {
+			nonce: Nonce,
+		}
+
 		let url = self.endpoint(PATH_NONCE);
 		let resp = self
 			.http
@@ -200,12 +209,8 @@ impl<S> RelayerClient<S> {
 			])
 			.send()
 			.await?;
-		let payload: serde_json::Value = handle_response(resp).await?;
-		payload
-			.get("nonce")
-			.and_then(|v| v.as_str())
-			.map(String::from)
-			.ok_or_else(|| PolyrelError::deserialize("missing nonce field in response"))
+		let payload: NonceResponse = handle_response(resp).await?;
+		Ok(payload.nonce)
 	}
 
 	fn endpoint(&self, path: &str) -> url::Url {
@@ -252,9 +257,9 @@ impl RelayerClient<Authenticated> {
 		&self,
 		signer: &S,
 		tx: sign::SafeTransaction,
-		nonce: U256,
+		nonce: Nonce,
 	) -> Result<SubmitResponse, PolyrelError> {
-		let request = sign::sign_safe_transaction(signer, &self.config, tx, nonce).await?;
+		let request = sign::sign_safe_transaction(signer, &self.config, tx, nonce.raw()).await?;
 		self.submit(&request).await
 	}
 
@@ -263,7 +268,7 @@ impl RelayerClient<Authenticated> {
 		&self,
 		signer: &S,
 		amount: U256,
-		nonce: U256,
+		nonce: Nonce,
 	) -> Result<SubmitResponse, PolyrelError> {
 		let (to, data) = sign::usdc_approve_exchange(&self.config, amount);
 		let tx = call_tx(to, data);
@@ -275,7 +280,7 @@ impl RelayerClient<Authenticated> {
 		&self,
 		signer: &S,
 		amount: U256,
-		nonce: U256,
+		nonce: Nonce,
 	) -> Result<SubmitResponse, PolyrelError> {
 		let (to, data) = sign::usdc_approve_neg_risk_exchange(&self.config, amount);
 		let tx = call_tx(to, data);
@@ -288,7 +293,7 @@ impl RelayerClient<Authenticated> {
 		signer: &S,
 		recipient: Address,
 		amount: U256,
-		nonce: U256,
+		nonce: Nonce,
 	) -> Result<SubmitResponse, PolyrelError> {
 		let (to, data) = sign::usdc_transfer(&self.config, recipient, amount);
 		let tx = call_tx(to, data);
@@ -299,7 +304,7 @@ impl RelayerClient<Authenticated> {
 	pub async fn approve_ctf_for_exchange<S: Signer + Sync>(
 		&self,
 		signer: &S,
-		nonce: U256,
+		nonce: Nonce,
 	) -> Result<SubmitResponse, PolyrelError> {
 		let (to, data) = sign::ctf_approve_exchange(&self.config);
 		let tx = call_tx(to, data);
@@ -310,7 +315,7 @@ impl RelayerClient<Authenticated> {
 	pub async fn approve_ctf_for_neg_risk_exchange<S: Signer + Sync>(
 		&self,
 		signer: &S,
-		nonce: U256,
+		nonce: Nonce,
 	) -> Result<SubmitResponse, PolyrelError> {
 		let (to, data) = sign::ctf_approve_neg_risk_exchange(&self.config);
 		let tx = call_tx(to, data);
@@ -324,7 +329,7 @@ impl RelayerClient<Authenticated> {
 		recipient: Address,
 		token_id: U256,
 		amount: U256,
-		nonce: U256,
+		nonce: Nonce,
 	) -> Result<SubmitResponse, PolyrelError> {
 		let safe = sign::derive_safe_address(
 			signer.address(),
@@ -343,7 +348,7 @@ impl RelayerClient<Authenticated> {
 		condition_id: B256,
 		partition: Vec<U256>,
 		amount: U256,
-		nonce: U256,
+		nonce: Nonce,
 	) -> Result<SubmitResponse, PolyrelError> {
 		let (to, data) = sign::ctf_split_position(&self.config, condition_id, partition, amount);
 		let tx = call_tx(to, data);
@@ -357,7 +362,7 @@ impl RelayerClient<Authenticated> {
 		condition_id: B256,
 		partition: Vec<U256>,
 		amount: U256,
-		nonce: U256,
+		nonce: Nonce,
 	) -> Result<SubmitResponse, PolyrelError> {
 		let (to, data) = sign::ctf_merge_positions(&self.config, condition_id, partition, amount);
 		let tx = call_tx(to, data);
@@ -370,7 +375,7 @@ impl RelayerClient<Authenticated> {
 		signer: &S,
 		condition_id: B256,
 		index_sets: Vec<U256>,
-		nonce: U256,
+		nonce: Nonce,
 	) -> Result<SubmitResponse, PolyrelError> {
 		let (to, data) = sign::ctf_redeem_positions(&self.config, condition_id, index_sets);
 		let tx = call_tx(to, data);

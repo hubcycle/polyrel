@@ -148,8 +148,7 @@
 //!         ));
 //!
 //!     // fetch the current nonce for this signer's Safe wallet
-//!     let nonce_str = client.safe_nonce(signer.address()).await?;
-//!     let nonce = nonce_str.parse::<U256>().expect("valid nonce");
+//!     let nonce = client.safe_nonce(signer.address()).await?;
 //!
 //!     // approve USDC for the CTF Exchange
 //!     let resp = client
@@ -157,11 +156,12 @@
 //!         .await?;
 //!
 //!     // poll until confirmed
+//!     use polyrel::KnownTransactionState;
 //!     let txn = client
 //!         .poll_until_state(
 //!             &resp.transaction_id,
-//!             &["STATE_MINED", "STATE_CONFIRMED"],
-//!             Some("STATE_FAILED"),
+//!             &[KnownTransactionState::Mined, KnownTransactionState::Confirmed],
+//!             Some(KnownTransactionState::Failed),
 //!             None,
 //!             None,
 //!         )
@@ -188,8 +188,9 @@ pub use sign::{
 	usdc_approve_neg_risk_exchange, usdc_transfer,
 };
 pub use types::{
-	Config, DeployedResponse, OperationType, RelayerInfo, RelayerTransaction, SignatureParams,
-	SubmitRequest, SubmitResponse, TransactionState, WalletType,
+	Config, DeployedResponse, KnownTransactionState, Nonce, OperationType, RelayerInfo,
+	RelayerTransaction, SignatureParams, SubmitRequest, SubmitResponse, TransactionId,
+	TransactionState, WalletType,
 };
 
 use alloy_primitives::{Address, address};

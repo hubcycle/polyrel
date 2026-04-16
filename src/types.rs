@@ -1,10 +1,14 @@
 //! Core types shared across the crate.
 
+use core::str::FromStr;
+
 use std::borrow::Cow;
 
-use alloy_primitives::{Address, B256};
+use alloy_primitives::{Address, B256, U256};
 use serde::{Deserialize, Serialize};
 use url::Url;
+
+use crate::PolyrelError;
 
 /// Configuration for contract addresses and relayer defaults.
 pub struct Config {
@@ -151,9 +155,9 @@ impl Config {
 	}
 }
 
-/// Transaction lifecycle state.
+/// Known transaction lifecycle states emitted by the relayer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub enum TransactionState {
+pub enum KnownTransactionState {
 	/// Queued for processing.
 	#[serde(rename = "STATE_NEW")]
 	New,
@@ -177,6 +181,90 @@ pub enum TransactionState {
 	/// Execution failed.
 	#[serde(rename = "STATE_FAILED")]
 	Failed,
+}
+
+/// Transaction lifecycle state as returned by the relayer.
+///
+/// The untagged representation preserves unknown wire values in
+/// [`TransactionState::Unknown`] so the client does not fail deserialization
+/// if the relayer introduces new states.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum TransactionState {
+	/// One of the states the client recognises.
+	Known(KnownTransactionState),
+
+	/// An unrecognised state string received from the relayer.
+	Unknown(String),
+}
+
+impl TransactionState {
+	/// Return `true` if this state equals the given known state.
+	pub fn is(&self, known: KnownTransactionState) -> bool {
+		matches!(self, Self::Known(k) if *k == known)
+	}
+}
+
+/// Transaction nonce.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Nonce(U256);
+
+impl Nonce {
+	/// Wrap a raw [`U256`] nonce.
+	pub fn new(value: U256) -> Self {
+		Self(value)
+	}
+
+	/// Return the underlying [`U256`].
+	pub fn raw(self) -> U256 {
+		self.0
+	}
+}
+
+impl Serialize for Nonce {
+	fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+		serializer.collect_str(&self.0)
+	}
+}
+
+impl<'de> Deserialize<'de> for Nonce {
+	fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+		let raw = String::deserialize(deserializer)?;
+		U256::from_str(&raw).map(Self).map_err(serde::de::Error::custom)
+	}
+}
+
+/// Unique identifier for a relayer transaction.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TransactionId(String);
+
+impl TransactionId {
+	/// Validate and wrap a transaction identifier.
+	pub fn new(id: impl Into<String>) -> Result<Self, PolyrelError> {
+		let id = id.into();
+		if id.is_empty() {
+			return Err(PolyrelError::deserialize("transaction id cannot be empty"));
+		}
+		Ok(Self(id))
+	}
+
+	/// Borrow as `&str`.
+	pub fn as_str(&self) -> &str {
+		&self.0
+	}
+}
+
+impl Serialize for TransactionId {
+	fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+		serializer.serialize_str(&self.0)
+	}
+}
+
+impl<'de> Deserialize<'de> for TransactionId {
+	fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+		let raw = String::deserialize(deserializer)?;
+		Self::new(raw).map_err(serde::de::Error::custom)
+	}
 }
 
 /// Wallet type for relayer transactions.
@@ -386,10 +474,10 @@ impl SubmitRequest {
 pub struct SubmitResponse {
 	/// Unique transaction identifier.
 	#[serde(rename = "transactionID")]
-	pub transaction_id: String,
+	pub transaction_id: TransactionId,
 
 	/// Current state.
-	pub state: String,
+	pub state: TransactionState,
 
 	/// On-chain transaction hash.
 	#[serde(default)]
@@ -405,7 +493,7 @@ pub struct SubmitResponse {
 pub struct RelayerTransaction {
 	/// Unique transaction identifier.
 	#[serde(rename = "transactionID")]
-	pub transaction_id: String,
+	pub transaction_id: TransactionId,
 
 	/// On-chain transaction hash.
 	#[serde(rename = "transactionHash", default)]
@@ -429,14 +517,14 @@ pub struct RelayerTransaction {
 
 	/// Transaction nonce.
 	#[serde(default)]
-	pub nonce: Option<String>,
+	pub nonce: Option<Nonce>,
 
 	/// ETH value.
 	#[serde(default)]
 	pub value: Option<String>,
 
 	/// Current state.
-	pub state: String,
+	pub state: TransactionState,
 
 	/// Transaction type.
 	#[serde(rename = "type", default)]
@@ -470,7 +558,7 @@ pub struct RelayerInfo {
 	pub address: String,
 
 	/// Current nonce.
-	pub nonce: String,
+	pub nonce: Nonce,
 }
 
 /// Response from `GET /deployed`.
@@ -592,8 +680,8 @@ mod tests {
 		let resp: SubmitResponse = serde_json::from_str(json).unwrap();
 
 		// Assert
-		assert_eq!(resp.transaction_id, "abc-123");
-		assert_eq!(resp.state, "STATE_NEW");
+		assert_eq!(resp.transaction_id.as_str(), "abc-123");
+		assert!(resp.state.is(KnownTransactionState::New));
 	}
 
 	#[test]
@@ -614,7 +702,7 @@ mod tests {
 		let txn: RelayerTransaction = serde_json::from_str(json).unwrap();
 
 		// Assert
-		assert_eq!(txn.transaction_id, "tx-1");
+		assert_eq!(txn.transaction_id.as_str(), "tx-1");
 		assert_eq!(txn.signature.as_deref(), Some("0xsig"));
 		assert_eq!(txn.owner.as_deref(), Some("owner-uuid"));
 	}
@@ -629,7 +717,7 @@ mod tests {
 	}
 
 	#[test]
-	fn transaction_state_round_trips() {
+	fn transaction_state_known_round_trips() {
 		// Arrange
 		let json = "\"STATE_CONFIRMED\"";
 
@@ -637,7 +725,25 @@ mod tests {
 		let state: TransactionState = serde_json::from_str(json).unwrap();
 
 		// Assert
-		assert_eq!(state, TransactionState::Confirmed);
+		assert_eq!(
+			state,
+			TransactionState::Known(KnownTransactionState::Confirmed)
+		);
 		assert_eq!(serde_json::to_string(&state).unwrap(), json);
+	}
+
+	#[test]
+	fn transaction_state_unknown_preserved() {
+		// Arrange
+		let json = "\"STATE_PENDING_RETRY\"";
+
+		// Act
+		let state: TransactionState = serde_json::from_str(json).unwrap();
+
+		// Assert
+		assert_eq!(
+			state,
+			TransactionState::Unknown("STATE_PENDING_RETRY".to_owned())
+		);
 	}
 }
