@@ -17,3 +17,15 @@ unsafe_code = "forbid"
 
 [lints.clippy]
 wildcard_imports = "deny"
+
+[features]
+default = []
+std = ["alloy-primitives/std", "alloy-sol-types/std"]
+
+[dependencies]
+alloy-primitives = { version = "1.5", default-features = false }
+alloy-sol-types = { version = "1.5", default-features = false }
+bon = { version = "3", default-features = false }
+
+[dev-dependencies]
+rstest = "0.26.1"
