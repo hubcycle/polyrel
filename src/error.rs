@@ -14,6 +14,9 @@ pub enum PolyrelError {
 	#[error("serialization error: {0}")]
 	Serialize(Cow<'static, str>),
 
+	#[error("deserialization error: {0}")]
+	Deserialize(Cow<'static, str>),
+
 	#[error("http error: {0}")]
 	Http(Cow<'static, str>),
 
@@ -44,6 +47,13 @@ impl PolyrelError {
 		Cow<'static, str>: From<E>,
 	{
 		Self::Serialize(Cow::from(msg))
+	}
+
+	pub fn deserialize<E>(msg: E) -> Self
+	where
+		Cow<'static, str>: From<E>,
+	{
+		Self::Deserialize(Cow::from(msg))
 	}
 
 	pub fn http<E>(msg: E) -> Self

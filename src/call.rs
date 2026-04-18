@@ -76,11 +76,17 @@ mod tests {
 
 	use super::*;
 
+	const FIXTURE_VALUE: u64 = 3;
+	const FIXTURE_DATA: &[u8] = &[0xaa, 0xbb];
+	const FIRST_CALL_ADDRESS: Address = address!("1111111111111111111111111111111111111111");
+	const SECOND_CALL_ADDRESS: Address = address!("2222222222222222222222222222222222222222");
+	const SECOND_CALL_DATA: &[u8] = &[0xcc];
+
 	fn fixture_call() -> Call {
 		Call::builder()
-			.to(address!("1111111111111111111111111111111111111111"))
-			.data(Bytes::from_static(&[0xaa, 0xbb]))
-			.value(U256::from(3_u64))
+			.to(FIRST_CALL_ADDRESS)
+			.data(Bytes::from_static(FIXTURE_DATA))
+			.value(U256::from(FIXTURE_VALUE))
 			.build()
 	}
 
@@ -101,8 +107,8 @@ mod tests {
 		// Arrange
 		let first = fixture_call();
 		let second = Call::builder()
-			.to(address!("2222222222222222222222222222222222222222"))
-			.data(Bytes::from_static(&[0xcc]))
+			.to(SECOND_CALL_ADDRESS)
+			.data(Bytes::from_static(SECOND_CALL_DATA))
 			.build();
 
 		// Act

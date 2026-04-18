@@ -19,14 +19,22 @@ unsafe_code = "forbid"
 wildcard_imports = "deny"
 
 [features]
-default = []
+default = ["client"]
 std = ["alloy-primitives/std", "alloy-sol-types/std"]
+client = ["std", "dep:reqwest", "dep:secrecy", "dep:url"]
 
 [dependencies]
 alloy-primitives = { version = "1.5", default-features = false }
 alloy-sol-types = { version = "1.5", default-features = false }
 bon = { version = "3", default-features = false }
+reqwest = { version = "0.13.2", default-features = false, features = ["json", "query", "rustls"], optional = true }
+secrecy = { version = "0.10.3", optional = true }
+serde = { version = "1", default-features = false, features = ["alloc", "derive"] }
 thiserror = { version = "2", default-features = false }
+url = { version = "2.5.8", optional = true }
 
 [dev-dependencies]
 rstest = "0.26.1"
+serde_json = { version = "1.0.149", default-features = false, features = ["alloc"] }
+tokio = { version = "1.51.1", features = ["macros", "rt-multi-thread"] }
+wiremock = "0.6.5"

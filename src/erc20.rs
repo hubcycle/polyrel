@@ -28,15 +28,23 @@ mod tests {
 
 	use super::*;
 
+	const APPROVE_TOKEN: Address = address!("1111111111111111111111111111111111111111");
+	const APPROVE_SPENDER: Address = address!("2222222222222222222222222222222222222222");
+	const APPROVE_AMOUNT: u64 = 42;
+	const APPROVE_EXPECTED: &str = "095ea7b30000000000000000000000002222222222222222222222222222222222222222000000000000000000000000000000000000000000000000000000000000002a";
+	const TRANSFER_TOKEN: Address = address!("3333333333333333333333333333333333333333");
+	const TRANSFER_RECIPIENT: Address = address!("4444444444444444444444444444444444444444");
+	const TRANSFER_AMOUNT: u64 = 7;
+	const TRANSFER_EXPECTED: &str = "a9059cbb00000000000000000000000044444444444444444444444444444444444444440000000000000000000000000000000000000000000000000000000000000007";
+	const VALID_CALLDATA_FIXTURE: &str = "valid calldata fixture";
+
 	#[test]
 	fn approve_encodes_expected_calldata() {
 		// Arrange
-		let token = address!("1111111111111111111111111111111111111111");
-		let spender = address!("2222222222222222222222222222222222222222");
-		let amount = U256::from(42_u64);
-		let expected = bytes(
-			"095ea7b30000000000000000000000002222222222222222222222222222222222222222000000000000000000000000000000000000000000000000000000000000002a",
-		);
+		let token = APPROVE_TOKEN;
+		let spender = APPROVE_SPENDER;
+		let amount = U256::from(APPROVE_AMOUNT);
+		let expected = bytes(APPROVE_EXPECTED);
 
 		// Act
 		let call = approve(token, spender, amount);
@@ -50,12 +58,10 @@ mod tests {
 	#[test]
 	fn transfer_encodes_expected_calldata() {
 		// Arrange
-		let token = address!("3333333333333333333333333333333333333333");
-		let recipient = address!("4444444444444444444444444444444444444444");
-		let amount = U256::from(7_u64);
-		let expected = bytes(
-			"a9059cbb00000000000000000000000044444444444444444444444444444444444444440000000000000000000000000000000000000000000000000000000000000007",
-		);
+		let token = TRANSFER_TOKEN;
+		let recipient = TRANSFER_RECIPIENT;
+		let amount = U256::from(TRANSFER_AMOUNT);
+		let expected = bytes(TRANSFER_EXPECTED);
 
 		// Act
 		let call = transfer(token, recipient, amount);
@@ -67,7 +73,7 @@ mod tests {
 	}
 
 	fn bytes(hex: &str) -> Bytes {
-		let decoded = alloy_primitives::hex::decode(hex).expect("valid calldata fixture");
+		let decoded = alloy_primitives::hex::decode(hex).expect(VALID_CALLDATA_FIXTURE);
 
 		Bytes::from(decoded)
 	}

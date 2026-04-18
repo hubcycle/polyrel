@@ -108,19 +108,31 @@ mod tests {
 
 	use super::*;
 
+	const COLLATERAL_TOKEN: Address = address!("0101010101010101010101010101010101010101");
+	const CTF: Address = address!("0202020202020202020202020202020202020202");
+	const CTF_EXCHANGE: Address = address!("0303030303030303030303030303030303030303");
+	const NEG_RISK_CTF_EXCHANGE: Address = address!("0404040404040404040404040404040404040404");
+	const NEG_RISK_ADAPTER: Address = address!("0505050505050505050505050505050505050505");
+	const APPROVAL_AMOUNT: u64 = 99;
+	const FULL_APPROVAL_COUNT: usize = 7;
+
 	fn contracts() -> PolymarketContracts {
 		PolymarketContracts::builder()
-			.collateral_token(address!("0101010101010101010101010101010101010101"))
-			.ctf(address!("0202020202020202020202020202020202020202"))
-			.ctf_exchange(address!("0303030303030303030303030303030303030303"))
-			.neg_risk_ctf_exchange(address!("0404040404040404040404040404040404040404"))
-			.neg_risk_adapter(address!("0505050505050505050505050505050505050505"))
+			.collateral_token(COLLATERAL_TOKEN)
+			.ctf(CTF)
+			.ctf_exchange(CTF_EXCHANGE)
+			.neg_risk_ctf_exchange(NEG_RISK_CTF_EXCHANGE)
+			.neg_risk_adapter(NEG_RISK_ADAPTER)
 			.build()
 	}
 
 	#[rstest]
 	#[case::ctf(
-		approve_collateral_for_ctf(contracts().collateral_token(), contracts().ctf(), U256::from(99_u64)),
+		approve_collateral_for_ctf(
+			contracts().collateral_token(),
+			contracts().ctf(),
+			U256::from(APPROVAL_AMOUNT)
+		),
 		contracts().collateral_token(),
 		contracts().ctf()
 	)]
@@ -128,7 +140,7 @@ mod tests {
 		approve_collateral_for_neg_risk_adapter(
 			contracts().collateral_token(),
 			contracts().neg_risk_adapter(),
-			U256::from(99_u64)
+			U256::from(APPROVAL_AMOUNT)
 		),
 		contracts().collateral_token(),
 		contracts().neg_risk_adapter()
@@ -137,7 +149,7 @@ mod tests {
 		approve_collateral_for_exchange(
 			contracts().collateral_token(),
 			contracts().ctf_exchange(),
-			U256::from(99_u64)
+			U256::from(APPROVAL_AMOUNT)
 		),
 		contracts().collateral_token(),
 		contracts().ctf_exchange()
@@ -146,7 +158,7 @@ mod tests {
 		approve_collateral_for_neg_risk_exchange(
 			contracts().collateral_token(),
 			contracts().neg_risk_ctf_exchange(),
-			U256::from(99_u64)
+			U256::from(APPROVAL_AMOUNT)
 		),
 		contracts().collateral_token(),
 		contracts().neg_risk_ctf_exchange()
@@ -157,7 +169,7 @@ mod tests {
 		#[case] spender: Address,
 	) {
 		// Arrange
-		let expected = erc20::approve(token, spender, U256::from(99_u64));
+		let expected = erc20::approve(token, spender, U256::from(APPROVAL_AMOUNT));
 
 		// Act
 		let actual = actual;
@@ -201,7 +213,7 @@ mod tests {
 	fn all_approvals_returns_fixed_bundle_order() {
 		// Arrange
 		let contracts = contracts();
-		let amount = U256::from(99_u64);
+		let amount = U256::from(APPROVAL_AMOUNT);
 
 		// Act
 		let calls = all_approvals(&contracts, amount);
@@ -228,7 +240,7 @@ mod tests {
 			approve_ctf_for_neg_risk_exchange(contracts.ctf(), contracts.neg_risk_ctf_exchange()),
 			approve_ctf_for_neg_risk_adapter(contracts.ctf(), contracts.neg_risk_adapter()),
 		];
-		assert_eq!(calls.len().get(), 7);
+		assert_eq!(calls.len().get(), FULL_APPROVAL_COUNT);
 		assert_eq!(calls.as_slice(), expected.as_slice());
 	}
 }
