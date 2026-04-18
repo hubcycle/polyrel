@@ -9,5 +9,7 @@ pub mod neg_risk;
 pub mod polymarket;
 
 mod call;
+mod error;
 
-pub use call::Call;
+pub use call::{Call, NonEmptyCalls};
+pub use error::PolyrelError;

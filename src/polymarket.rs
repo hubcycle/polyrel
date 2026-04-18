@@ -1,27 +1,85 @@
+use alloc::vec;
+
 use alloy_primitives::{Address, U256};
+use bon::Builder;
 
-use crate::{Call, erc20, erc1155};
+use crate::{Call, NonEmptyCalls, erc20, erc1155};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub fn approve_collateral_for_ctf(collateral_token: Address, ctf: Address, amount: U256) -> Call {
+	erc20::approve(collateral_token, ctf, amount)
+}
+
+pub fn approve_collateral_for_exchange(
+	collateral_token: Address,
+	ctf_exchange: Address,
+	amount: U256,
+) -> Call {
+	erc20::approve(collateral_token, ctf_exchange, amount)
+}
+
+pub fn approve_collateral_for_neg_risk_exchange(
+	collateral_token: Address,
+	neg_risk_ctf_exchange: Address,
+	amount: U256,
+) -> Call {
+	erc20::approve(collateral_token, neg_risk_ctf_exchange, amount)
+}
+
+pub fn approve_collateral_for_neg_risk_adapter(
+	collateral_token: Address,
+	neg_risk_adapter: Address,
+	amount: U256,
+) -> Call {
+	erc20::approve(collateral_token, neg_risk_adapter, amount)
+}
+
+pub fn approve_ctf_for_exchange(ctf: Address, ctf_exchange: Address) -> Call {
+	erc1155::set_approval_for_all(ctf, ctf_exchange, true)
+}
+
+pub fn approve_ctf_for_neg_risk_exchange(ctf: Address, neg_risk_ctf_exchange: Address) -> Call {
+	erc1155::set_approval_for_all(ctf, neg_risk_ctf_exchange, true)
+}
+
+pub fn approve_ctf_for_neg_risk_adapter(ctf: Address, neg_risk_adapter: Address) -> Call {
+	erc1155::set_approval_for_all(ctf, neg_risk_adapter, true)
+}
+
+pub fn all_approvals(contracts: &PolymarketContracts, amount: U256) -> NonEmptyCalls {
+	NonEmptyCalls::new(vec![
+		approve_collateral_for_ctf(contracts.collateral_token(), contracts.ctf(), amount),
+		approve_collateral_for_neg_risk_adapter(
+			contracts.collateral_token(),
+			contracts.neg_risk_adapter(),
+			amount,
+		),
+		approve_collateral_for_exchange(
+			contracts.collateral_token(),
+			contracts.ctf_exchange(),
+			amount,
+		),
+		approve_collateral_for_neg_risk_exchange(
+			contracts.collateral_token(),
+			contracts.neg_risk_ctf_exchange(),
+			amount,
+		),
+		approve_ctf_for_exchange(contracts.ctf(), contracts.ctf_exchange()),
+		approve_ctf_for_neg_risk_exchange(contracts.ctf(), contracts.neg_risk_ctf_exchange()),
+		approve_ctf_for_neg_risk_adapter(contracts.ctf(), contracts.neg_risk_adapter()),
+	])
+	.unwrap() // unwrap is safe as the approval bundle is non-empty
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Builder)]
 pub struct PolymarketContracts {
 	collateral_token: Address,
 	ctf: Address,
 	ctf_exchange: Address,
 	neg_risk_ctf_exchange: Address,
+	neg_risk_adapter: Address,
 }
 
-#[bon::bon]
 impl PolymarketContracts {
-	#[builder]
-	pub fn new(
-		collateral_token: Address,
-		ctf: Address,
-		ctf_exchange: Address,
-		neg_risk_ctf_exchange: Address,
-	) -> Self {
-		Self { collateral_token, ctf, ctf_exchange, neg_risk_ctf_exchange }
-	}
-
 	pub fn collateral_token(&self) -> Address {
 		self.collateral_token
 	}
@@ -37,37 +95,10 @@ impl PolymarketContracts {
 	pub fn neg_risk_ctf_exchange(&self) -> Address {
 		self.neg_risk_ctf_exchange
 	}
-}
 
-pub fn approve_collateral_for_ctf(contracts: &PolymarketContracts, amount: U256) -> Call {
-	erc20::approve(contracts.collateral_token(), contracts.ctf(), amount)
-}
-
-pub fn approve_collateral_for_exchange(contracts: &PolymarketContracts, amount: U256) -> Call {
-	erc20::approve(
-		contracts.collateral_token(),
-		contracts.ctf_exchange(),
-		amount,
-	)
-}
-
-pub fn approve_collateral_for_neg_risk_exchange(
-	contracts: &PolymarketContracts,
-	amount: U256,
-) -> Call {
-	erc20::approve(
-		contracts.collateral_token(),
-		contracts.neg_risk_ctf_exchange(),
-		amount,
-	)
-}
-
-pub fn approve_ctf_for_exchange(contracts: &PolymarketContracts) -> Call {
-	erc1155::set_approval_for_all(contracts.ctf(), contracts.ctf_exchange(), true)
-}
-
-pub fn approve_ctf_for_neg_risk_exchange(contracts: &PolymarketContracts) -> Call {
-	erc1155::set_approval_for_all(contracts.ctf(), contracts.neg_risk_ctf_exchange(), true)
+	pub fn neg_risk_adapter(&self) -> Address {
+		self.neg_risk_adapter
+	}
 }
 
 #[cfg(test)]
@@ -83,18 +114,40 @@ mod tests {
 			.ctf(address!("0202020202020202020202020202020202020202"))
 			.ctf_exchange(address!("0303030303030303030303030303030303030303"))
 			.neg_risk_ctf_exchange(address!("0404040404040404040404040404040404040404"))
+			.neg_risk_adapter(address!("0505050505050505050505050505050505050505"))
 			.build()
 	}
 
 	#[rstest]
-	#[case::ctf(approve_collateral_for_ctf(&contracts(), U256::from(99_u64)), contracts().collateral_token(), contracts().ctf())]
+	#[case::ctf(
+		approve_collateral_for_ctf(contracts().collateral_token(), contracts().ctf(), U256::from(99_u64)),
+		contracts().collateral_token(),
+		contracts().ctf()
+	)]
+	#[case::neg_risk_adapter(
+		approve_collateral_for_neg_risk_adapter(
+			contracts().collateral_token(),
+			contracts().neg_risk_adapter(),
+			U256::from(99_u64)
+		),
+		contracts().collateral_token(),
+		contracts().neg_risk_adapter()
+	)]
 	#[case::exchange(
-		approve_collateral_for_exchange(&contracts(), U256::from(99_u64)),
+		approve_collateral_for_exchange(
+			contracts().collateral_token(),
+			contracts().ctf_exchange(),
+			U256::from(99_u64)
+		),
 		contracts().collateral_token(),
 		contracts().ctf_exchange()
 	)]
 	#[case::neg_risk_exchange(
-		approve_collateral_for_neg_risk_exchange(&contracts(), U256::from(99_u64)),
+		approve_collateral_for_neg_risk_exchange(
+			contracts().collateral_token(),
+			contracts().neg_risk_ctf_exchange(),
+			U256::from(99_u64)
+		),
 		contracts().collateral_token(),
 		contracts().neg_risk_ctf_exchange()
 	)]
@@ -114,11 +167,20 @@ mod tests {
 	}
 
 	#[rstest]
-	#[case::exchange(approve_ctf_for_exchange(&contracts()), contracts().ctf(), contracts().ctf_exchange())]
+	#[case::exchange(
+		approve_ctf_for_exchange(contracts().ctf(), contracts().ctf_exchange()),
+		contracts().ctf(),
+		contracts().ctf_exchange()
+	)]
 	#[case::neg_risk_exchange(
-		approve_ctf_for_neg_risk_exchange(&contracts()),
+		approve_ctf_for_neg_risk_exchange(contracts().ctf(), contracts().neg_risk_ctf_exchange()),
 		contracts().ctf(),
 		contracts().neg_risk_ctf_exchange()
+	)]
+	#[case::neg_risk_adapter(
+		approve_ctf_for_neg_risk_adapter(contracts().ctf(), contracts().neg_risk_adapter()),
+		contracts().ctf(),
+		contracts().neg_risk_adapter()
 	)]
 	fn ctf_operator_recipes_use_caller_supplied_addresses(
 		#[case] actual: Call,
@@ -133,5 +195,40 @@ mod tests {
 
 		// Assert
 		assert_eq!(actual, expected);
+	}
+
+	#[test]
+	fn all_approvals_returns_fixed_bundle_order() {
+		// Arrange
+		let contracts = contracts();
+		let amount = U256::from(99_u64);
+
+		// Act
+		let calls = all_approvals(&contracts, amount);
+
+		// Assert
+		let expected = [
+			approve_collateral_for_ctf(contracts.collateral_token(), contracts.ctf(), amount),
+			approve_collateral_for_neg_risk_adapter(
+				contracts.collateral_token(),
+				contracts.neg_risk_adapter(),
+				amount,
+			),
+			approve_collateral_for_exchange(
+				contracts.collateral_token(),
+				contracts.ctf_exchange(),
+				amount,
+			),
+			approve_collateral_for_neg_risk_exchange(
+				contracts.collateral_token(),
+				contracts.neg_risk_ctf_exchange(),
+				amount,
+			),
+			approve_ctf_for_exchange(contracts.ctf(), contracts.ctf_exchange()),
+			approve_ctf_for_neg_risk_exchange(contracts.ctf(), contracts.neg_risk_ctf_exchange()),
+			approve_ctf_for_neg_risk_adapter(contracts.ctf(), contracts.neg_risk_adapter()),
+		];
+		assert_eq!(calls.len().get(), 7);
+		assert_eq!(calls.as_slice(), expected.as_slice());
 	}
 }
