@@ -1121,9 +1121,7 @@ mod tests {
 	};
 
 	use super::*;
-	use crate::safe::{
-		ChainId, FactoryDomainName, SafeCreateContext, SafeCreatePayment, build_create_draft,
-	};
+	use crate::safe::{self, ChainId, FactoryDomainName, SafeCreateContext, SafeCreatePayment};
 
 	const AUTH_ADDRESS: Address = address!("6e0c80c90ea6c15917308f820eac91ce2724b5b5");
 	const SAFE_ADDRESS: Address = address!("6d8c4e9adf5748af82dabe2c6225207770d6b4fa");
@@ -1374,7 +1372,7 @@ mod tests {
 	async fn submit_sends_relayer_auth_headers_and_body() {
 		// Arrange
 		let server = MockServer::start().await;
-		let request = build_create_draft(
+		let request = safe::build_create_draft(
 			&SafeCreateContext::builder()
 				.owner(AUTH_ADDRESS)
 				.chain_id(ChainId::new(137.try_into().unwrap()))
@@ -1424,7 +1422,7 @@ mod tests {
 	async fn submit_sends_builder_auth_headers_and_body() {
 		// Arrange
 		let server = MockServer::start().await;
-		let request = build_create_draft(
+		let request = safe::build_create_draft(
 			&SafeCreateContext::builder()
 				.owner(AUTH_ADDRESS)
 				.chain_id(ChainId::new(137.try_into().unwrap()))

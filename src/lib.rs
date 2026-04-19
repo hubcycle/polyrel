@@ -17,9 +17,7 @@
 //! use alloy_primitives::{Address, U256, address, b256};
 //! use polyrel::{
 //!     NonEmptyCalls, erc20,
-//!     safe::{
-//!         ChainId, SafeExecutionContext, SafeGasParams, SafeNonce, build_execution_draft,
-//!     },
+//!     safe::{self, ChainId, SafeExecutionContext, SafeGasParams, SafeNonce},
 //! };
 //!
 //! let call = erc20::approve(
@@ -46,7 +44,7 @@
 //!             .build(),
 //!     )
 //!     .build();
-//! let _draft = build_execution_draft(&context, NonEmptyCalls::from_one(call)).unwrap();
+//! let _draft = safe::build_execution_draft(&context, NonEmptyCalls::from_one(call)).unwrap();
 //! ```
 //!
 //! Create a relayer client when the `client` feature is enabled:
