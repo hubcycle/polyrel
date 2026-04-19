@@ -11,6 +11,7 @@ sol! {
 	}
 }
 
+/// Builds neg-risk adapter `redeemPositions(conditionId, amounts)` calldata.
 pub fn redeem_positions(adapter: Address, condition_id: B256, amounts: Vec<U256>) -> Call {
 	let data = Bytes::from(
 		INegRiskAdapter::redeemPositionsCall { conditionId: condition_id, amounts }.abi_encode(),

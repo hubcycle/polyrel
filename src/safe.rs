@@ -51,39 +51,52 @@ alloy_sol_types::sol! {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Safe operation type for a transaction or aggregated batch.
 pub enum SafeOperation {
+	/// A standard call.
 	Call,
+	/// A delegatecall, typically used for MultiSend aggregation.
 	DelegateCall,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+/// Relayer request kind used when submitting Safe-related requests.
 pub enum SubmitKind {
 	#[serde(rename = "SAFE")]
+	/// Standard Safe execution request.
 	Safe,
 
 	#[serde(rename = "SAFE-CREATE")]
+	/// Safe deployment request.
 	SafeCreate,
 
 	#[serde(rename = "PROXY")]
+	/// Proxy transaction request.
 	Proxy,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Non-zero EVM chain identifier used for Safe EIP-712 domains.
 pub struct ChainId(NonZeroU64);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Safe transaction nonce.
 pub struct SafeNonce(U256);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+/// EIP-712 domain name used for Safe deployment typed data.
 pub struct FactoryDomainName(Cow<'static, str>);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+/// Optional relayer metadata attached to a Safe execution request.
 pub struct Metadata(Cow<'static, str>);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Safe-packed signature bytes ready for relayer submission.
 pub struct PackedSafeSignature([u8; 65]);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Builder)]
+/// Payment parameters included in a `SAFE-CREATE` deployment signature.
 pub struct SafeCreatePayment {
 	payment_token: Address,
 	payment: U256,
@@ -91,6 +104,7 @@ pub struct SafeCreatePayment {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Builder)]
+/// Gas and refund parameters for a Safe execution request.
 pub struct SafeGasParams {
 	safe_txn_gas: U256,
 	base_gas: U256,
@@ -100,6 +114,7 @@ pub struct SafeGasParams {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Builder)]
+/// Context required to derive a Safe address and build a deployment draft.
 pub struct SafeCreateContext {
 	owner: Address,
 	chain_id: ChainId,
@@ -109,6 +124,7 @@ pub struct SafeCreateContext {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Builder)]
+/// Context required to build a Safe execution draft.
 pub struct SafeExecutionContext {
 	owner: Address,
 	chain_id: ChainId,
@@ -121,122 +137,165 @@ pub struct SafeExecutionContext {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+/// JSON description of an EIP-712 field for wallet integrations.
 pub struct TypedDataFieldJson {
+	/// Field name.
 	pub name: &'static str,
 
 	#[serde(rename = "type")]
+	/// Solidity type name.
 	pub type_name: &'static str,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
+/// JSON-serializable EIP-712 domain object.
 pub struct TypedDataDomainJson {
 	#[serde(skip_serializing_if = "Option::is_none")]
+	/// Human-readable domain name.
 	pub name: Option<String>,
 
 	#[serde(skip_serializing_if = "Option::is_none")]
+	/// Optional domain version.
 	pub version: Option<String>,
 
 	#[serde(skip_serializing_if = "Option::is_none")]
+	/// EVM chain ID.
 	pub chain_id: Option<u64>,
 
 	#[serde(skip_serializing_if = "Option::is_none")]
+	/// Verifying contract address.
 	pub verifying_contract: Option<String>,
 
 	#[serde(skip_serializing_if = "Option::is_none")]
+	/// Optional EIP-712 salt.
 	pub salt: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
+/// JSON-serializable `CreateProxy` message payload.
 pub struct CreateProxyMessageJson {
+	/// Payment token address.
 	pub payment_token: String,
+	/// Payment amount as a decimal string.
 	pub payment: String,
+	/// Payment receiver address.
 	pub payment_receiver: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+/// Generic JSON-serializable EIP-712 typed-data payload.
 pub struct TypedDataJson<M>
 where
 	M: Serialize,
 {
+	/// Type definitions keyed by type name.
 	pub types: BTreeMap<String, Vec<TypedDataFieldJson>>,
 
 	#[serde(rename = "primaryType")]
+	/// Primary type name.
 	pub primary_type: String,
 
+	/// EIP-712 domain object.
 	pub domain: TypedDataDomainJson,
+	/// Message payload.
 	pub message: M,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
+/// Relayer `signatureParams` payload for Safe and SafeCreate requests.
 pub struct SignatureParams {
 	#[serde(skip_serializing_if = "Option::is_none")]
+	/// Gas price used by the Safe execution request.
 	pub gas_price: Option<String>,
 
 	#[serde(skip_serializing_if = "Option::is_none")]
+	/// Safe operation encoded as a decimal string.
 	pub operation: Option<String>,
 
 	#[serde(skip_serializing_if = "Option::is_none")]
+	/// Safe transaction gas as a decimal string.
 	pub safe_txn_gas: Option<String>,
 
 	#[serde(skip_serializing_if = "Option::is_none")]
+	/// Safe base gas as a decimal string.
 	pub base_gas: Option<String>,
 
 	#[serde(skip_serializing_if = "Option::is_none")]
+	/// Gas token address.
 	pub gas_token: Option<String>,
 
 	#[serde(skip_serializing_if = "Option::is_none")]
+	/// Refund receiver address.
 	pub refund_receiver: Option<String>,
 
 	#[serde(skip_serializing_if = "Option::is_none")]
+	/// Deployment payment token address.
 	pub payment_token: Option<String>,
 
 	#[serde(skip_serializing_if = "Option::is_none")]
+	/// Deployment payment amount as a decimal string.
 	pub payment: Option<String>,
 
 	#[serde(skip_serializing_if = "Option::is_none")]
+	/// Deployment payment receiver address.
 	pub payment_receiver: Option<String>,
 
 	#[serde(skip_serializing_if = "Option::is_none")]
+	/// Proxy relayer fee as a decimal string.
 	pub relayer_fee: Option<String>,
 
 	#[serde(skip_serializing_if = "Option::is_none")]
+	/// Proxy gas limit as a decimal string.
 	pub gas_limit: Option<String>,
 
 	#[serde(skip_serializing_if = "Option::is_none")]
+	/// Proxy relay hub address.
 	pub relay_hub: Option<String>,
 
 	#[serde(skip_serializing_if = "Option::is_none")]
+	/// Proxy relay address.
 	pub relay: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
+/// Raw relayer submit request generated by the Safe builders.
 pub struct SubmitRequest {
+	/// Request sender address.
 	pub from: String,
+	/// Request target address.
 	pub to: String,
 
 	#[serde(skip_serializing_if = "Option::is_none")]
+	/// Safe or proxy wallet address.
 	pub proxy_wallet: Option<String>,
 
+	/// ABI-encoded calldata.
 	pub data: String,
 
+	/// Signature bytes as a hex string.
 	pub signature: String,
+	/// Relayer signature parameters.
 	pub signature_params: SignatureParams,
 
 	#[serde(rename = "type")]
+	/// Relayer request kind.
 	pub kind: SubmitKind,
 
 	#[serde(skip_serializing_if = "Option::is_none")]
+	/// Nonce encoded as a decimal string.
 	pub nonce: Option<String>,
 
 	#[serde(skip_serializing_if = "Option::is_none")]
+	/// Optional relayer metadata.
 	pub metadata: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+/// Unsigned Safe deployment draft.
 pub struct SafeCreateDraft {
 	safe_address: Address,
 	signing_hash: B256,
@@ -245,6 +304,7 @@ pub struct SafeCreateDraft {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+/// Unsigned Safe execution draft.
 pub struct SafeExecutionDraft {
 	safe_address: Address,
 	aggregated_call: Call,
@@ -266,26 +326,31 @@ struct DraftSubmitBase {
 }
 
 impl ChainId {
+	/// Creates a chain identifier from a non-zero raw value.
 	pub fn new(raw: NonZeroU64) -> Self {
 		Self(raw)
 	}
 
+	/// Returns the underlying chain ID.
 	pub fn raw(&self) -> u64 {
 		self.0.get()
 	}
 }
 
 impl SafeNonce {
+	/// Creates a Safe nonce from the raw value.
 	pub fn new(raw: U256) -> Self {
 		Self(raw)
 	}
 
+	/// Returns the underlying nonce value.
 	pub fn raw(&self) -> U256 {
 		self.0
 	}
 }
 
 impl FactoryDomainName {
+	/// Creates a validated factory domain name.
 	pub fn new(value: Cow<'static, str>) -> Result<Self, PolyrelError> {
 		if value.is_empty() {
 			return Err(PolyrelError::validation(
@@ -296,31 +361,38 @@ impl FactoryDomainName {
 		Ok(Self(value))
 	}
 
+	/// Returns the domain name as a string slice.
 	pub fn as_str(&self) -> &str {
 		self.0.as_ref()
 	}
 }
 
 impl Metadata {
+	/// Creates relayer metadata.
 	pub fn new(value: Cow<'static, str>) -> Self {
 		Self(value)
 	}
 
+	/// Returns the metadata as a string slice.
 	pub fn as_str(&self) -> &str {
 		self.0.as_ref()
 	}
 }
 
 impl PackedSafeSignature {
+	/// Minimum Safe-packed `v` value.
 	pub const V_MIN: u8 = 31;
+	/// Maximum Safe-packed `v` value.
 	pub const V_MAX: u8 = 32;
 
+	/// Creates a validated Safe-packed signature from raw bytes.
 	pub fn new(bytes: [u8; 65]) -> Result<Self, PolyrelError> {
 		validate_packed_signature_bytes(&bytes)?;
 
 		Ok(Self(bytes))
 	}
 
+	/// Packs a wallet-produced signature into the Safe-specific encoding expected by the relayer.
 	pub fn from_wallet_signature(signature: Signature) -> Self {
 		let mut bytes = signature.as_bytes();
 		bytes[64] += 4;
@@ -328,108 +400,132 @@ impl PackedSafeSignature {
 		Self(bytes)
 	}
 
+	/// Returns the packed signature bytes.
 	pub fn as_bytes(&self) -> &[u8; 65] {
 		&self.0
 	}
 
+	/// Consumes the wrapper and returns the underlying packed bytes.
 	pub fn into_bytes(self) -> [u8; 65] {
 		self.0
 	}
 }
 
 impl SafeCreatePayment {
+	/// Returns the deployment payment token address.
 	pub fn payment_token(&self) -> Address {
 		self.payment_token
 	}
 
+	/// Returns the deployment payment amount.
 	pub fn payment(&self) -> U256 {
 		self.payment
 	}
 
+	/// Returns the deployment payment receiver address.
 	pub fn payment_receiver(&self) -> Address {
 		self.payment_receiver
 	}
 }
 
 impl SafeGasParams {
+	/// Returns the Safe transaction gas value.
 	pub fn safe_txn_gas(&self) -> U256 {
 		self.safe_txn_gas
 	}
 
+	/// Returns the Safe base gas value.
 	pub fn base_gas(&self) -> U256 {
 		self.base_gas
 	}
 
+	/// Returns the Safe gas price value.
 	pub fn gas_price(&self) -> U256 {
 		self.gas_price
 	}
 
+	/// Returns the gas token address.
 	pub fn gas_token(&self) -> Address {
 		self.gas_token
 	}
 
+	/// Returns the refund receiver address.
 	pub fn refund_receiver(&self) -> Address {
 		self.refund_receiver
 	}
 }
 
 impl SafeCreateContext {
+	/// Returns the EOA owner address.
 	pub fn owner(&self) -> Address {
 		self.owner
 	}
 
+	/// Returns the chain ID used in the EIP-712 domain.
 	pub fn chain_id(&self) -> ChainId {
 		self.chain_id
 	}
 
+	/// Returns the Safe factory address.
 	pub fn safe_factory(&self) -> Address {
 		self.safe_factory
 	}
 
+	/// Returns the init code hash used for address derivation.
 	pub fn safe_init_code_hash(&self) -> B256 {
 		self.safe_init_code_hash
 	}
 
+	/// Returns the factory domain name used for typed-data signing.
 	pub fn factory_domain_name(&self) -> &FactoryDomainName {
 		&self.factory_domain_name
 	}
 }
 
 impl SafeExecutionContext {
+	/// Returns the EOA owner address.
 	pub fn owner(&self) -> Address {
 		self.owner
 	}
 
+	/// Returns the chain ID used in the EIP-712 domain.
 	pub fn chain_id(&self) -> ChainId {
 		self.chain_id
 	}
 
+	/// Returns the Safe factory address.
 	pub fn safe_factory(&self) -> Address {
 		self.safe_factory
 	}
 
+	/// Returns the init code hash used for address derivation.
 	pub fn safe_init_code_hash(&self) -> B256 {
 		self.safe_init_code_hash
 	}
 
+	/// Returns the MultiSend contract address.
 	pub fn safe_multisend(&self) -> Address {
 		self.safe_multisend
 	}
 
+	/// Returns the Safe nonce for the execution request.
 	pub fn nonce(&self) -> SafeNonce {
 		self.nonce
 	}
 
+	/// Returns the configured Safe gas parameters.
 	pub fn gas_params(&self) -> &SafeGasParams {
 		&self.gas_params
 	}
 
+	/// Returns optional relayer metadata.
 	pub fn metadata(&self) -> Option<&Metadata> {
 		self.metadata.as_ref()
 	}
 }
 
 impl SafeOperation {
+	/// Returns the Safe wire-format operation value.
 	pub fn as_u8(self) -> u8 {
 		match self {
 			Self::Call => 0,
@@ -439,6 +535,7 @@ impl SafeOperation {
 }
 
 impl SignatureParams {
+	/// Builds `signatureParams` for a standard Safe execution request.
 	pub fn safe(operation: SafeOperation, gas_params: &SafeGasParams) -> Self {
 		Self {
 			gas_price: Some(gas_params.gas_price().to_string()),
@@ -457,6 +554,7 @@ impl SignatureParams {
 		}
 	}
 
+	/// Builds `signatureParams` for a Safe deployment request.
 	pub fn safe_create(payment: &SafeCreatePayment) -> Self {
 		Self {
 			gas_price: None,
@@ -477,52 +575,65 @@ impl SignatureParams {
 }
 
 impl SafeCreateDraft {
+	/// Primary type name used for Safe deployment typed data.
 	pub const PRIMARY_TYPE: &str = "CreateProxy";
+	/// Domain type name used for Safe deployment typed data.
 	pub const DOMAIN_TYPE: &str = "EIP712Domain";
 
+	/// Returns the derived Safe address.
 	pub fn safe_address(&self) -> Address {
 		self.safe_address
 	}
 
+	/// Returns the EIP-712 signing hash for the deployment request.
 	pub fn signing_hash(&self) -> B256 {
 		self.signing_hash
 	}
 
+	/// Returns the JSON-serializable typed-data payload for the deployment request.
 	pub fn typed_data(&self) -> &TypedDataJson<CreateProxyMessageJson> {
 		&self.typed_data
 	}
 
+	/// Finalizes the draft into a relayer submit request using a deployment signature.
 	pub fn into_submit_request(self, signature: Signature) -> SubmitRequest {
 		self.submit_base.into_submit_request(&signature.as_bytes())
 	}
 }
 
 impl SafeExecutionDraft {
+	/// Returns the derived Safe address.
 	pub fn safe_address(&self) -> Address {
 		self.safe_address
 	}
 
+	/// Returns the final call that the Safe will execute.
 	pub fn aggregated_call(&self) -> &Call {
 		&self.aggregated_call
 	}
 
+	/// Returns the Safe operation for the final call.
 	pub fn operation(&self) -> SafeOperation {
 		self.operation
 	}
 
+	/// Returns the EIP-712 signing hash for the execution request.
 	pub fn signing_hash(&self) -> B256 {
 		self.signing_hash
 	}
 
+	/// Returns the payload expected by `personal_sign`.
 	pub fn personal_sign_payload(&self) -> B256 {
 		self.signing_hash
 	}
 
+	/// Finalizes the draft into a relayer submit request using a packed Safe signature.
 	pub fn into_submit_request(self, signature: PackedSafeSignature) -> SubmitRequest {
 		self.submit_base.into_submit_request(signature.as_bytes())
 	}
 }
 
+/// Derives the deterministic Safe address for an owner and factory configuration.
 pub fn derive_address(owner: Address, safe_factory: Address, safe_init_code_hash: B256) -> Address {
 	let mut encoded = [0_u8; 32];
 	encoded[12..].copy_from_slice(owner.as_slice());
@@ -531,6 +642,7 @@ pub fn derive_address(owner: Address, safe_factory: Address, safe_init_code_hash
 	create2_address(safe_factory, salt, safe_init_code_hash)
 }
 
+/// Builds an unsigned Safe deployment draft.
 pub fn build_create_draft(
 	context: &SafeCreateContext,
 	payment: &SafeCreatePayment,
@@ -571,6 +683,7 @@ pub fn build_create_draft(
 	}
 }
 
+/// Builds an unsigned Safe execution draft for one or more calls.
 pub fn build_execution_draft(
 	context: &SafeExecutionContext,
 	calls: NonEmptyCalls,

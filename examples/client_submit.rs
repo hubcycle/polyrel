@@ -1,3 +1,5 @@
+//! Example showing how to prepare a relayer submit request.
+
 #[cfg(feature = "client")]
 fn main() {
 	use alloy_primitives::{Address, B256, Signature, U256, address, b256};

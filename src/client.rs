@@ -1,4 +1,5 @@
 #![cfg(feature = "client")]
+//! Raw Polymarket relayer HTTP client.
 
 mod dto;
 
@@ -32,29 +33,37 @@ mod sealed {
 	}
 }
 
+/// Typestate marker for an unauthenticated relayer client.
 pub struct Unauthenticated;
 
+/// Typestate marker for a relayer client authenticated with a relayer API key.
 pub struct RelayerAuthenticated {
 	auth: RelayerApiKeyAuth,
 }
 
+/// Typestate marker for a relayer client authenticated with builder HMAC headers.
 pub struct BuilderAuthenticated {
 	auth: BuilderAuth,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Query kind used for relayer endpoints that distinguish Safe and proxy wallets.
 pub enum WalletQueryKind {
+	/// Query the Safe wallet view.
 	Safe,
+	/// Query the proxy wallet view.
 	Proxy,
 }
 
 #[derive(Clone)]
+/// Relayer API key authentication material.
 pub struct RelayerApiKeyAuth {
 	key: SecretString,
 	address: Address,
 }
 
 #[derive(Clone)]
+/// Builder HMAC authentication material.
 pub struct BuilderAuth {
 	key: SecretString,
 	secret: SecretString,
@@ -62,10 +71,12 @@ pub struct BuilderAuth {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+/// Validated base URL for the relayer service.
 pub struct RelayerBaseUrl {
 	url: Url,
 }
 
+/// Typed relayer client parameterized by authentication state.
 pub struct RelayerClient<State = Unauthenticated> {
 	base_url: RelayerBaseUrl,
 	http: reqwest::Client,
@@ -73,43 +84,60 @@ pub struct RelayerClient<State = Unauthenticated> {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Documented relayer transaction lifecycle states.
 pub enum RelayerTransactionState {
+	/// Transaction was received by the relayer.
 	New,
+	/// Transaction was submitted onchain.
 	Executed,
+	/// Transaction was included in a block.
 	Mined,
+	/// Transaction was finalized successfully.
 	Confirmed,
+	/// Transaction failed permanently.
 	Failed,
+	/// Transaction was rejected as invalid.
 	Invalid,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Transaction kinds accepted by the relayer.
 pub enum RelayerTransactionKind {
+	/// Standard Safe execution request.
 	Safe,
+	/// Safe deployment request.
 	SafeCreate,
+	/// Proxy transaction request.
 	Proxy,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// UUID-backed relayer transaction identifier.
 pub struct TransactionId(Uuid);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// UUID-backed relayer API key identifier.
 pub struct RelayerApiKeyId(Uuid);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+/// Non-empty transaction metadata string returned by the relayer.
 pub struct TransactionMetadata(Cow<'static, str>);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+/// Current Safe or proxy nonce returned by the relayer.
 pub struct CurrentNonce {
 	nonce: U256,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+/// Relayer payload details used by proxy flows.
 pub struct RelayPayload {
 	address: Address,
 	nonce: U256,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+/// Result of submitting a transaction to the relayer.
 pub struct SubmittedTransaction {
 	transaction_id: TransactionId,
 	state: RelayerTransactionState,
@@ -118,6 +146,7 @@ pub struct SubmittedTransaction {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+/// Relayer transaction record returned by listing and lookup endpoints.
 pub struct RelayerTransaction {
 	transaction_id: TransactionId,
 	transaction_hash: Option<B256>,
@@ -137,6 +166,7 @@ pub struct RelayerTransaction {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+/// Relayer API key record returned by the relayer API key endpoint.
 pub struct RelayerApiKey {
 	api_key_id: RelayerApiKeyId,
 	address: Address,
@@ -171,6 +201,7 @@ impl RelayerTransactionState {
 	const MINED_STATE: &str = "STATE_MINED";
 	const NEW_STATE: &str = "STATE_NEW";
 
+	/// Returns the canonical wire-format state string.
 	pub fn as_str(&self) -> &'static str {
 		match self {
 			Self::New => Self::NEW_STATE,
@@ -182,6 +213,7 @@ impl RelayerTransactionState {
 		}
 	}
 
+	/// Returns whether the state is terminal according to the relayer documentation.
 	pub fn is_terminal(&self) -> bool {
 		matches!(self, Self::Confirmed | Self::Failed | Self::Invalid)
 	}
@@ -192,6 +224,7 @@ impl RelayerTransactionKind {
 	const SAFE_CREATE_KIND: &str = "SAFE-CREATE";
 	const SAFE_KIND: &str = "SAFE";
 
+	/// Returns the canonical wire-format transaction kind string.
 	pub fn as_str(&self) -> &'static str {
 		match self {
 			Self::Safe => Self::SAFE_KIND,
@@ -202,18 +235,21 @@ impl RelayerTransactionKind {
 }
 
 impl TransactionId {
+	/// Returns the underlying UUID.
 	pub fn raw(&self) -> Uuid {
 		self.0
 	}
 }
 
 impl RelayerApiKeyId {
+	/// Returns the underlying UUID.
 	pub fn raw(&self) -> Uuid {
 		self.0
 	}
 }
 
 impl TransactionMetadata {
+	/// Creates validated transaction metadata.
 	pub fn new(value: Cow<'static, str>) -> Result<Self, PolyrelError> {
 		if value.is_empty() {
 			return Err(PolyrelError::deserialize(
@@ -224,120 +260,147 @@ impl TransactionMetadata {
 		Ok(Self(value))
 	}
 
+	/// Returns the metadata as a string slice.
 	pub fn as_str(&self) -> &str {
 		self.0.as_ref()
 	}
 }
 
 impl CurrentNonce {
+	/// Returns the nonce value.
 	pub fn nonce(&self) -> U256 {
 		self.nonce
 	}
 }
 
 impl RelayPayload {
+	/// Returns the relayer address.
 	pub fn address(&self) -> Address {
 		self.address
 	}
 
+	/// Returns the relay nonce.
 	pub fn nonce(&self) -> U256 {
 		self.nonce
 	}
 }
 
 impl SubmittedTransaction {
+	/// Returns the relayer transaction identifier.
 	pub fn transaction_id(&self) -> TransactionId {
 		self.transaction_id
 	}
 
+	/// Returns the current relayer state.
 	pub fn state(&self) -> RelayerTransactionState {
 		self.state
 	}
 
+	/// Returns the optional hash field returned by the relayer.
 	pub fn hash(&self) -> Option<B256> {
 		self.hash
 	}
 
+	/// Returns the optional onchain transaction hash.
 	pub fn transaction_hash(&self) -> Option<B256> {
 		self.transaction_hash
 	}
 }
 
 impl RelayerTransaction {
+	/// Returns the relayer transaction identifier.
 	pub fn transaction_id(&self) -> TransactionId {
 		self.transaction_id
 	}
 
+	/// Returns the onchain transaction hash, if present.
 	pub fn transaction_hash(&self) -> Option<B256> {
 		self.transaction_hash
 	}
 
+	/// Returns the request sender address, if present.
 	pub fn from(&self) -> Option<Address> {
 		self.from
 	}
 
+	/// Returns the target address, if present.
 	pub fn to(&self) -> Option<Address> {
 		self.to
 	}
 
+	/// Returns the Safe or proxy wallet address, if present.
 	pub fn proxy_address(&self) -> Option<Address> {
 		self.proxy_address
 	}
 
+	/// Returns the raw calldata, if present.
 	pub fn data(&self) -> Option<&Bytes> {
 		self.data.as_ref()
 	}
 
+	/// Returns the transaction nonce, if present.
 	pub fn nonce(&self) -> Option<U256> {
 		self.nonce
 	}
 
+	/// Returns the native value, if present.
 	pub fn value(&self) -> Option<U256> {
 		self.value
 	}
 
+	/// Returns the current relayer state.
 	pub fn state(&self) -> RelayerTransactionState {
 		self.state
 	}
 
+	/// Returns the relayer transaction kind, if present.
 	pub fn transaction_kind(&self) -> Option<RelayerTransactionKind> {
 		self.transaction_kind
 	}
 
+	/// Returns relayer metadata, if present.
 	pub fn metadata(&self) -> Option<&TransactionMetadata> {
 		self.metadata.as_ref()
 	}
 
+	/// Returns the submitted signature bytes, if present.
 	pub fn signature(&self) -> Option<&Bytes> {
 		self.signature.as_ref()
 	}
 
+	/// Returns the owner address, if present.
 	pub fn owner(&self) -> Option<Address> {
 		self.owner
 	}
 
+	/// Returns the creation timestamp, if present.
 	pub fn created_at(&self) -> Option<&OffsetDateTime> {
 		self.created_at.as_ref()
 	}
 
+	/// Returns the last update timestamp, if present.
 	pub fn updated_at(&self) -> Option<&OffsetDateTime> {
 		self.updated_at.as_ref()
 	}
 }
 
 impl RelayerApiKey {
+	/// Returns the relayer API key identifier.
 	pub fn api_key_id(&self) -> RelayerApiKeyId {
 		self.api_key_id
 	}
 
+	/// Returns the address associated with the API key.
 	pub fn address(&self) -> Address {
 		self.address
 	}
 
+	/// Returns the creation timestamp.
 	pub fn created_at(&self) -> &OffsetDateTime {
 		&self.created_at
 	}
 
+	/// Returns the last update timestamp.
 	pub fn updated_at(&self) -> &OffsetDateTime {
 		&self.updated_at
 	}
@@ -347,6 +410,7 @@ impl WalletQueryKind {
 	const SAFE_KIND: &str = "SAFE";
 	const PROXY_KIND: &str = "PROXY";
 
+	/// Returns the wire-format query value expected by the relayer.
 	pub fn as_str(&self) -> &'static str {
 		match self {
 			Self::Safe => Self::SAFE_KIND,
@@ -356,52 +420,66 @@ impl WalletQueryKind {
 }
 
 impl RelayerApiKeyAuth {
+	/// Header name for the relayer API key.
 	pub const HEADER_API_KEY: &str = "RELAYER_API_KEY";
+	/// Header name for the relayer API key address.
 	pub const HEADER_API_KEY_ADDRESS: &str = "RELAYER_API_KEY_ADDRESS";
 	const HEADER_API_KEY_LOWER: &str = "relayer_api_key";
 	const HEADER_API_KEY_ADDRESS_LOWER: &str = "relayer_api_key_address";
 
+	/// Creates relayer API key authentication material.
 	pub fn new(key: SecretString, address: Address) -> Self {
 		Self { key, address }
 	}
 
+	/// Returns the secret relayer API key.
 	pub fn key(&self) -> &SecretString {
 		&self.key
 	}
 
+	/// Returns the address associated with the API key.
 	pub fn address(&self) -> Address {
 		self.address
 	}
 }
 
 impl BuilderAuth {
+	/// Header name for the builder API key.
 	pub const HEADER_API_KEY: &str = "POLY_BUILDER_API_KEY";
+	/// Header name for the builder passphrase.
 	pub const HEADER_PASSPHRASE: &str = "POLY_BUILDER_PASSPHRASE";
+	/// Header name for the HMAC signature.
 	pub const HEADER_SIGNATURE: &str = "POLY_BUILDER_SIGNATURE";
+	/// Header name for the signature timestamp.
 	pub const HEADER_TIMESTAMP: &str = "POLY_BUILDER_TIMESTAMP";
 	const HEADER_API_KEY_LOWER: &str = "poly_builder_api_key";
 	const HEADER_PASSPHRASE_LOWER: &str = "poly_builder_passphrase";
 	const HEADER_SIGNATURE_LOWER: &str = "poly_builder_signature";
 	const HEADER_TIMESTAMP_LOWER: &str = "poly_builder_timestamp";
 
+	/// Creates builder HMAC authentication material.
 	pub fn new(key: SecretString, secret: SecretString, passphrase: SecretString) -> Self {
 		Self { key, secret, passphrase }
 	}
 
+	/// Returns the builder API key.
 	pub fn key(&self) -> &SecretString {
 		&self.key
 	}
 
+	/// Returns the builder secret used for HMAC signing.
 	pub fn secret(&self) -> &SecretString {
 		&self.secret
 	}
 
+	/// Returns the builder passphrase.
 	pub fn passphrase(&self) -> &SecretString {
 		&self.passphrase
 	}
 }
 
 impl RelayerBaseUrl {
+	/// Creates a validated relayer base URL from an already parsed [`Url`].
 	pub fn new(mut url: Url) -> Result<Self, PolyrelError> {
 		match url.scheme() {
 			SCHEME_HTTP | SCHEME_HTTPS => {},
@@ -430,6 +508,7 @@ impl RelayerBaseUrl {
 		Ok(Self { url })
 	}
 
+	/// Parses and validates a relayer base URL.
 	pub fn parse<U>(url: U) -> Result<Self, PolyrelError>
 	where
 		U: AsRef<str>,
@@ -439,24 +518,29 @@ impl RelayerBaseUrl {
 		Self::new(url)
 	}
 
+	/// Returns the validated URL.
 	pub fn as_url(&self) -> &Url {
 		&self.url
 	}
 }
 
 impl RelayerClient<Unauthenticated> {
+	/// Creates a new unauthenticated relayer client with a default HTTP client.
 	pub fn new(base_url: RelayerBaseUrl) -> Self {
 		Self { base_url, http: reqwest::Client::new(), state: Unauthenticated }
 	}
 
+	/// Creates a new unauthenticated relayer client with a caller-supplied HTTP client.
 	pub fn with_http(base_url: RelayerBaseUrl, http: reqwest::Client) -> Self {
 		Self { base_url, http, state: Unauthenticated }
 	}
 
+	/// Authenticates the client with relayer API key headers.
 	pub fn authenticate(self, auth: RelayerApiKeyAuth) -> RelayerClient<RelayerAuthenticated> {
 		self.authenticate_relayer(auth)
 	}
 
+	/// Authenticates the client with relayer API key headers.
 	pub fn authenticate_relayer(
 		self,
 		auth: RelayerApiKeyAuth,
@@ -468,6 +552,7 @@ impl RelayerClient<Unauthenticated> {
 		}
 	}
 
+	/// Authenticates the client with builder HMAC headers.
 	pub fn authenticate_builder(self, auth: BuilderAuth) -> RelayerClient<BuilderAuthenticated> {
 		RelayerClient {
 			base_url: self.base_url,
@@ -478,10 +563,12 @@ impl RelayerClient<Unauthenticated> {
 }
 
 impl<S> RelayerClient<S> {
+	/// Returns the validated relayer base URL.
 	pub fn base_url(&self) -> &RelayerBaseUrl {
 		&self.base_url
 	}
 
+	/// Fetches relayer transactions by relayer transaction identifier.
 	pub async fn transaction_by_id(
 		&self,
 		transaction_id: &str,
@@ -500,6 +587,7 @@ impl<S> RelayerClient<S> {
 		transactions.into_iter().map(RelayerTransaction::try_from).collect()
 	}
 
+	/// Fetches the current nonce for a Safe or proxy wallet.
 	pub async fn current_nonce(
 		&self,
 		address: Address,
@@ -522,6 +610,7 @@ impl<S> RelayerClient<S> {
 		CurrentNonce::try_from(nonce)
 	}
 
+	/// Fetches the relay payload for proxy-based transactions.
 	pub async fn relay_payload(
 		&self,
 		address: Address,
@@ -544,6 +633,7 @@ impl<S> RelayerClient<S> {
 		RelayPayload::try_from(payload)
 	}
 
+	/// Returns whether a Safe wallet has already been deployed.
 	pub async fn is_safe_deployed(&self, address: Address) -> Result<bool, PolyrelError> {
 		#[derive(Deserialize)]
 		struct DeployedResponse {
@@ -583,6 +673,7 @@ impl<S> RelayerClient<S>
 where
 	S: sealed::Authenticated,
 {
+	/// Submits a signed relayer request.
 	pub async fn submit(
 		&self,
 		request: &SubmitRequest,
@@ -610,6 +701,7 @@ where
 		SubmittedTransaction::try_from(submitted)
 	}
 
+	/// Returns recent relayer transactions for the authenticated principal.
 	pub async fn recent_transactions(&self) -> Result<Vec<RelayerTransaction>, PolyrelError> {
 		let url = self.endpoint(PATH_TRANSACTIONS)?;
 		let response = self
@@ -632,10 +724,12 @@ where
 }
 
 impl RelayerClient<RelayerAuthenticated> {
+	/// Returns the relayer API key auth material associated with the client.
 	pub fn auth(&self) -> &RelayerApiKeyAuth {
 		&self.state.auth
 	}
 
+	/// Lists relayer API keys for the authenticated relayer principal.
 	pub async fn relayer_api_keys(&self) -> Result<Vec<RelayerApiKey>, PolyrelError> {
 		let url = self.endpoint(PATH_RELAYER_API_KEYS)?;
 		let response = self
@@ -658,6 +752,7 @@ impl RelayerClient<RelayerAuthenticated> {
 }
 
 impl RelayerClient<BuilderAuthenticated> {
+	/// Returns the builder auth material associated with the client.
 	pub fn auth(&self) -> &BuilderAuth {
 		&self.state.auth
 	}

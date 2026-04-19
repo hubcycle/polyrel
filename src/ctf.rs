@@ -32,6 +32,7 @@ sol! {
 	}
 }
 
+/// Builds Conditional Tokens `splitPosition(...)` calldata.
 pub fn split_position(
 	ctf: Address,
 	collateral_token: Address,
@@ -54,6 +55,7 @@ pub fn split_position(
 	Call::builder().to(ctf).data(data).build()
 }
 
+/// Builds Conditional Tokens `mergePositions(...)` calldata.
 pub fn merge_positions(
 	ctf: Address,
 	collateral_token: Address,
@@ -76,6 +78,7 @@ pub fn merge_positions(
 	Call::builder().to(ctf).data(data).build()
 }
 
+/// Builds Conditional Tokens `redeemPositions(...)` calldata.
 pub fn redeem_positions(
 	ctf: Address,
 	collateral_token: Address,

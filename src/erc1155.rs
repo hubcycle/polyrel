@@ -16,12 +16,14 @@ sol! {
 	}
 }
 
+/// Builds ERC-1155 `setApprovalForAll(operator, approved)` calldata.
 pub fn set_approval_for_all(token: Address, operator: Address, approved: bool) -> Call {
 	let data = Bytes::from(IERC1155::setApprovalForAllCall { operator, approved }.abi_encode());
 
 	Call::builder().to(token).data(data).build()
 }
 
+/// Builds ERC-1155 `safeTransferFrom(from, to, id, value, data)` calldata.
 pub fn safe_transfer_from(
 	token: Address,
 	from: Address,

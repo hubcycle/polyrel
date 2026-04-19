@@ -1,3 +1,5 @@
+//! Example showing how to build a bundled Safe approval request.
+
 use alloy_primitives::{Address, B256, Signature, U256};
 
 use polyrel::{

@@ -5,10 +5,12 @@ use bon::Builder;
 
 use crate::{Call, NonEmptyCalls, erc20, erc1155};
 
+/// Builds the collateral approval needed for CTF split and merge operations.
 pub fn approve_collateral_for_ctf(collateral_token: Address, ctf: Address, amount: U256) -> Call {
 	erc20::approve(collateral_token, ctf, amount)
 }
 
+/// Builds the collateral approval used by the standard CTF exchange.
 pub fn approve_collateral_for_exchange(
 	collateral_token: Address,
 	ctf_exchange: Address,
@@ -17,6 +19,7 @@ pub fn approve_collateral_for_exchange(
 	erc20::approve(collateral_token, ctf_exchange, amount)
 }
 
+/// Builds the collateral approval used by the neg-risk CTF exchange.
 pub fn approve_collateral_for_neg_risk_exchange(
 	collateral_token: Address,
 	neg_risk_ctf_exchange: Address,
@@ -25,6 +28,7 @@ pub fn approve_collateral_for_neg_risk_exchange(
 	erc20::approve(collateral_token, neg_risk_ctf_exchange, amount)
 }
 
+/// Builds the collateral approval used by the neg-risk adapter.
 pub fn approve_collateral_for_neg_risk_adapter(
 	collateral_token: Address,
 	neg_risk_adapter: Address,
@@ -33,18 +37,22 @@ pub fn approve_collateral_for_neg_risk_adapter(
 	erc20::approve(collateral_token, neg_risk_adapter, amount)
 }
 
+/// Builds the ERC-1155 operator approval for the standard CTF exchange.
 pub fn approve_ctf_for_exchange(ctf: Address, ctf_exchange: Address) -> Call {
 	erc1155::set_approval_for_all(ctf, ctf_exchange, true)
 }
 
+/// Builds the ERC-1155 operator approval for the neg-risk CTF exchange.
 pub fn approve_ctf_for_neg_risk_exchange(ctf: Address, neg_risk_ctf_exchange: Address) -> Call {
 	erc1155::set_approval_for_all(ctf, neg_risk_ctf_exchange, true)
 }
 
+/// Builds the ERC-1155 operator approval for the neg-risk adapter.
 pub fn approve_ctf_for_neg_risk_adapter(ctf: Address, neg_risk_adapter: Address) -> Call {
 	erc1155::set_approval_for_all(ctf, neg_risk_adapter, true)
 }
 
+/// Builds the full 7-call approval bundle commonly used for Polymarket market-making flows.
 pub fn all_approvals(contracts: &PolymarketContracts, amount: U256) -> NonEmptyCalls {
 	NonEmptyCalls::new(vec![
 		approve_collateral_for_ctf(contracts.collateral_token(), contracts.ctf(), amount),
@@ -70,6 +78,7 @@ pub fn all_approvals(contracts: &PolymarketContracts, amount: U256) -> NonEmptyC
 	.unwrap() // unwrap is safe as the approval bundle is non-empty
 }
 
+/// Address bundle for the contracts involved in common Polymarket approval flows.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Builder)]
 pub struct PolymarketContracts {
 	collateral_token: Address,
@@ -80,22 +89,27 @@ pub struct PolymarketContracts {
 }
 
 impl PolymarketContracts {
+	/// Returns the collateral token address.
 	pub fn collateral_token(&self) -> Address {
 		self.collateral_token
 	}
 
+	/// Returns the Conditional Tokens contract address.
 	pub fn ctf(&self) -> Address {
 		self.ctf
 	}
 
+	/// Returns the standard CTF exchange address.
 	pub fn ctf_exchange(&self) -> Address {
 		self.ctf_exchange
 	}
 
+	/// Returns the neg-risk CTF exchange address.
 	pub fn neg_risk_ctf_exchange(&self) -> Address {
 		self.neg_risk_ctf_exchange
 	}
 
+	/// Returns the neg-risk adapter address.
 	pub fn neg_risk_adapter(&self) -> Address {
 		self.neg_risk_adapter
 	}

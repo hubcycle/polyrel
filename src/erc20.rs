@@ -10,12 +10,14 @@ sol! {
 	}
 }
 
+/// Builds ERC-20 `approve(spender, amount)` calldata.
 pub fn approve(token: Address, spender: Address, amount: U256) -> Call {
 	let data = Bytes::from(IERC20::approveCall { spender, amount }.abi_encode());
 
 	Call::builder().to(token).data(data).build()
 }
 
+/// Builds ERC-20 `transfer(recipient, amount)` calldata.
 pub fn transfer(token: Address, recipient: Address, amount: U256) -> Call {
 	let data = Bytes::from(IERC20::transferCall { recipient, amount }.abi_encode());
 

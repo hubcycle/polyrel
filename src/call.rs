@@ -6,6 +6,7 @@ use alloy_primitives::{Address, Bytes, U256};
 
 use crate::PolyrelError;
 
+/// Generic EVM call envelope used by the builders in this crate.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Call {
 	to: Address,
@@ -13,6 +14,7 @@ pub struct Call {
 	value: U256,
 }
 
+/// Non-empty collection of [`Call`] values.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NonEmptyCalls {
 	calls: Vec<Call>,
@@ -20,25 +22,32 @@ pub struct NonEmptyCalls {
 
 #[bon::bon]
 impl Call {
+	/// Creates a new call targeting `to` with ABI-encoded `data`.
+	///
+	/// When `value` is omitted it defaults to zero.
 	#[builder]
 	pub fn new(to: Address, data: Bytes, value: Option<U256>) -> Self {
 		Self { to, data, value: value.unwrap_or(U256::ZERO) }
 	}
 
+	/// Returns the destination contract address.
 	pub fn to(&self) -> Address {
 		self.to
 	}
 
+	/// Returns the ABI-encoded calldata.
 	pub fn data(&self) -> &Bytes {
 		&self.data
 	}
 
+	/// Returns the native token value to send with the call.
 	pub fn value(&self) -> U256 {
 		self.value
 	}
 }
 
 impl NonEmptyCalls {
+	/// Creates a non-empty call collection.
 	pub fn new(calls: Vec<Call>) -> Result<Self, PolyrelError> {
 		if calls.is_empty() {
 			return Err(PolyrelError::EmptyCalls);
@@ -47,22 +56,27 @@ impl NonEmptyCalls {
 		Ok(Self { calls })
 	}
 
+	/// Creates a one-element collection from a single call.
 	pub fn from_one(call: Call) -> Self {
 		Self { calls: vec![call] }
 	}
 
+	/// Returns the number of calls in the collection.
 	pub fn len(&self) -> NonZeroUsize {
 		NonZeroUsize::new(self.calls.len()).unwrap() // unwrap is safe as `calls` is non-empty
 	}
 
+	/// Returns the calls as a slice.
 	pub fn as_slice(&self) -> &[Call] {
 		&self.calls
 	}
 
+	/// Appends a call to the collection.
 	pub fn push(&mut self, call: Call) {
 		self.calls.push(call);
 	}
 
+	/// Consumes the wrapper and returns the underlying vector.
 	pub fn into_vec(self) -> Vec<Call> {
 		self.calls
 	}
