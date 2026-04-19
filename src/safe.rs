@@ -3,14 +3,13 @@ use core::num::NonZeroU64;
 use alloc::{
 	borrow::Cow,
 	collections::BTreeMap,
-	format,
 	string::{String, ToString},
 	vec,
 	vec::Vec,
 };
 
-use alloy_primitives::{Address, B256, Bytes, Signature, U256, keccak256};
-use alloy_sol_types::{Eip712Domain, SolCall, SolStruct, sol};
+use alloy_primitives::{Address, B256, Bytes, Signature, U256};
+use alloy_sol_types::{Eip712Domain, SolCall, SolStruct};
 use bon::Builder;
 use serde::Serialize;
 
@@ -26,7 +25,7 @@ const FIELD_NAME_PAYMENT_RECEIVER: &str = "paymentReceiver";
 const FIELD_NAME_PAYMENT_TOKEN: &str = "paymentToken";
 const FIELD_NAME_VERIFYING_CONTRACT: &str = "verifyingContract";
 
-sol! {
+alloy_sol_types::sol! {
 	struct SafeTx {
 		address to;
 		uint256 value;
@@ -216,9 +215,6 @@ pub struct SignatureParams {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SubmitRequest {
-	#[serde(rename = "type")]
-	pub kind: SubmitKind,
-
 	pub from: String,
 	pub to: String,
 
@@ -227,11 +223,14 @@ pub struct SubmitRequest {
 
 	pub data: String,
 
-	#[serde(skip_serializing_if = "Option::is_none")]
-	pub nonce: Option<String>,
-
 	pub signature: String,
 	pub signature_params: SignatureParams,
+
+	#[serde(rename = "type")]
+	pub kind: SubmitKind,
+
+	#[serde(skip_serializing_if = "Option::is_none")]
+	pub nonce: Option<String>,
 
 	#[serde(skip_serializing_if = "Option::is_none")]
 	pub metadata: Option<String>,
@@ -527,7 +526,7 @@ impl SafeExecutionDraft {
 pub fn derive_address(owner: Address, safe_factory: Address, safe_init_code_hash: B256) -> Address {
 	let mut encoded = [0_u8; 32];
 	encoded[12..].copy_from_slice(owner.as_slice());
-	let salt = keccak256(encoded);
+	let salt = alloy_primitives::keccak256(encoded);
 
 	create2_address(safe_factory, salt, safe_init_code_hash)
 }
@@ -575,18 +574,23 @@ pub fn build_create_draft(
 pub fn build_execution_draft(
 	context: &SafeExecutionContext,
 	calls: NonEmptyCalls,
-) -> SafeExecutionDraft {
+) -> Result<SafeExecutionDraft, PolyrelError> {
+	validate_zero_value_calls(calls.as_slice())?;
+
 	let safe_address = derive_address(
 		context.owner(),
 		context.safe_factory(),
 		context.safe_init_code_hash(),
 	);
+
 	let (aggregated_call, operation) = aggregate_calls(calls, context.safe_multisend());
+
 	let domain = Eip712Domain {
 		chain_id: Some(U256::from(context.chain_id().raw())),
 		verifying_contract: Some(safe_address),
 		..Default::default()
 	};
+
 	let safe_tx = SafeTx {
 		to: aggregated_call.to(),
 		value: aggregated_call.value(),
@@ -599,9 +603,10 @@ pub fn build_execution_draft(
 		refundReceiver: context.gas_params().refund_receiver(),
 		nonce: context.nonce().raw(),
 	};
+
 	let signing_hash = safe_tx.eip712_signing_hash(&domain);
 
-	SafeExecutionDraft {
+	Ok(SafeExecutionDraft {
 		safe_address,
 		aggregated_call,
 		operation,
@@ -616,11 +621,11 @@ pub fn build_execution_draft(
 			signature_params: SignatureParams::safe(operation, context.gas_params()),
 			metadata: context.metadata().cloned(),
 		},
-	}
+	})
 }
 
 impl DraftSubmitBase {
-	fn into_submit_request(self, signature_bytes: &[u8]) -> SubmitRequest {
+	fn into_submit_request(self, signature_bz: &[u8]) -> SubmitRequest {
 		SubmitRequest {
 			kind: self.kind,
 			from: address_string(self.from),
@@ -628,7 +633,7 @@ impl DraftSubmitBase {
 			proxy_wallet: Some(address_string(self.safe_address)),
 			data: hex_string(self.data.as_ref()),
 			nonce: self.nonce.map(|nonce| nonce.raw().to_string()),
-			signature: hex_string(signature_bytes),
+			signature: hex_string(signature_bz),
 			signature_params: self.signature_params,
 			metadata: self.metadata.map(|metadata| metadata.as_str().to_string()),
 		}
@@ -638,7 +643,7 @@ impl DraftSubmitBase {
 fn aggregate_calls(calls: NonEmptyCalls, safe_multisend: Address) -> (Call, SafeOperation) {
 	if calls.len().get() == 1 {
 		return (
-			calls.into_vec().into_iter().next().expect("non-empty"),
+			calls.into_vec().into_iter().next().unwrap(), // unwrap is safe as `calls` is non-empty
 			SafeOperation::Call,
 		);
 	}
@@ -648,6 +653,18 @@ fn aggregate_calls(calls: NonEmptyCalls, safe_multisend: Address) -> (Call, Safe
 	let call = Call::builder().to(safe_multisend).data(data).build();
 
 	(call, SafeOperation::DelegateCall)
+}
+
+fn validate_zero_value_calls(calls: &[Call]) -> Result<(), PolyrelError> {
+	for call in calls {
+		if call.value() != U256::ZERO {
+			return Err(PolyrelError::validation(
+				"safe execution only supports value = 0",
+			));
+		}
+	}
+
+	Ok(())
 }
 
 fn encode_multisend_payload(calls: &[Call]) -> Vec<u8> {
@@ -718,7 +735,7 @@ fn create2_address(deployer: Address, salt: B256, init_code_hash: B256) -> Addre
 	payload[1..21].copy_from_slice(deployer.as_slice());
 	payload[21..53].copy_from_slice(salt.as_slice());
 	payload[53..85].copy_from_slice(init_code_hash.as_slice());
-	let hash = keccak256(payload);
+	let hash = alloy_primitives::keccak256(payload);
 
 	Address::from_slice(&hash[12..])
 }
@@ -734,11 +751,11 @@ fn validate_packed_signature_bytes(bytes: &[u8; 65]) -> Result<(), PolyrelError>
 }
 
 fn address_string(address: Address) -> String {
-	format!("{address:#x}")
+	address.to_string()
 }
 
 fn hex_string(bytes: &[u8]) -> String {
-	format!("0x{}", alloy_primitives::hex::encode(bytes))
+	alloy_primitives::hex::encode_prefixed(bytes)
 }
 
 #[cfg(test)]
@@ -759,14 +776,14 @@ mod tests {
 		b256!("2bce2127ff07fb632d16c8347c4ebf501f4841168bed00d9e6ef715ddb6fcecf");
 	const TEST_FACTORY_DOMAIN_NAME: &str = "Polymarket Contract Proxy Factory";
 	const TEST_METADATA: &str = "approve";
-	const TEST_CREATE_TYPED_DATA_JSON: &str = r#"{"types":{"CreateProxy":[{"name":"paymentToken","type":"address"},{"name":"payment","type":"uint256"},{"name":"paymentReceiver","type":"address"}],"EIP712Domain":[{"name":"name","type":"string"},{"name":"chainId","type":"uint256"},{"name":"verifyingContract","type":"address"}]},"primaryType":"CreateProxy","domain":{"name":"Polymarket Contract Proxy Factory","chainId":137,"verifyingContract":"0xaacfeea03eb1561c4e67d661e40682bd20e3541b"},"message":{"paymentToken":"0x0000000000000000000000000000000000000000","payment":"0","paymentReceiver":"0x0000000000000000000000000000000000000000"}}"#;
+	const TEST_CREATE_TYPED_DATA_JSON: &str = r#"{"types":{"CreateProxy":[{"name":"paymentToken","type":"address"},{"name":"payment","type":"uint256"},{"name":"paymentReceiver","type":"address"}],"EIP712Domain":[{"name":"name","type":"string"},{"name":"chainId","type":"uint256"},{"name":"verifyingContract","type":"address"}]},"primaryType":"CreateProxy","domain":{"name":"Polymarket Contract Proxy Factory","chainId":137,"verifyingContract":"0xaacFeEa03eb1561C4e67d661e40682Bd20E3541b"},"message":{"paymentToken":"0x0000000000000000000000000000000000000000","payment":"0","paymentReceiver":"0x0000000000000000000000000000000000000000"}}"#;
 	const TEST_CREATE_HASH: B256 =
 		b256!("563ac315294c5be01ab1f3b04a5abdfa39e8317a9d90679d4e63caf760b126a4");
 	const TEST_EXECUTION_HASH: B256 =
 		b256!("8835f5f740c39b2c57b5fa5f5f67a3c3a4cc5e68cb38bb392f4e239d4b08c044");
 	const TEST_MULTISEND_CALLDATA: &str = "8d80ff0a000000000000000000000000000000000000000000000000000000000000002000000000000000000000000000000000000000000000000000000000000000b000c011a7e12a19f7b1f670d46f03b03f3342e82dfb00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000004deadbeef002791bca1f2de4661ed88a30c99a7a9449aa8417400000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000002cafe00000000000000000000000000000000";
 	const TEST_PACKED_SIGNATURE: &str = "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa1f";
-	const TEST_CREATE_REQUEST_JSON: &str = r#"{"type":"SAFE-CREATE","from":"0x6e0c80c90ea6c15917308f820eac91ce2724b5b5","to":"0xaacfeea03eb1561c4e67d661e40682bd20e3541b","proxyWallet":"0x6d8c4e9adf5748af82dabe2c6225207770d6b4fa","data":"0x","signature":"0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb1b","signatureParams":{"paymentToken":"0x0000000000000000000000000000000000000000","payment":"0","paymentReceiver":"0x0000000000000000000000000000000000000000"}}"#;
+	const TEST_CREATE_REQUEST_JSON: &str = r#"{"from":"0x6e0c80c90ea6c15917308F820Eac91Ce2724B5b5","to":"0xaacFeEa03eb1561C4e67d661e40682Bd20E3541b","proxyWallet":"0x6d8c4e9aDF5748Af82Dabe2C6225207770d6B4fa","data":"0x","signature":"0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb1b","signatureParams":{"paymentToken":"0x0000000000000000000000000000000000000000","payment":"0","paymentReceiver":"0x0000000000000000000000000000000000000000"},"type":"SAFE-CREATE"}"#;
 
 	fn create_context() -> SafeCreateContext {
 		SafeCreateContext::builder()
@@ -867,7 +884,7 @@ mod tests {
 		let calls = NonEmptyCalls::from_one(approval_call());
 
 		// Act
-		let draft = build_execution_draft(&execution_context(), calls);
+		let draft = build_execution_draft(&execution_context(), calls).unwrap();
 
 		// Assert
 		assert_eq!(draft.operation(), SafeOperation::Call);
@@ -885,7 +902,7 @@ mod tests {
 		let calls = NonEmptyCalls::new(vec![first, second]).unwrap();
 
 		// Act
-		let draft = build_execution_draft(&execution_context(), calls);
+		let draft = build_execution_draft(&execution_context(), calls).unwrap();
 
 		// Assert
 		assert_eq!(draft.operation(), SafeOperation::DelegateCall);
@@ -899,7 +916,7 @@ mod tests {
 	fn execution_submit_request_packs_wallet_signature() {
 		// Arrange
 		let calls = NonEmptyCalls::from_one(approval_call());
-		let draft = build_execution_draft(&execution_context(), calls);
+		let draft = build_execution_draft(&execution_context(), calls).unwrap();
 		let signature = PackedSafeSignature::from_wallet_signature(wallet_signature(0xaa, 27));
 
 		// Act
@@ -935,5 +952,43 @@ mod tests {
 
 		// Assert
 		assert!(matches!(result, Err(PolyrelError::InvalidSignature(_))));
+	}
+
+	#[test]
+	fn execution_draft_rejects_single_call_with_non_zero_value() {
+		// Arrange
+		let calls = NonEmptyCalls::from_one(
+			Call::builder()
+				.to(TEST_SINGLE_CALL_TARGET)
+				.data(Bytes::from_static(&[0xde, 0xad]))
+				.value(U256::from(1_u64))
+				.build(),
+		);
+
+		// Act
+		let result = build_execution_draft(&execution_context(), calls);
+
+		// Assert
+		assert!(matches!(result, Err(PolyrelError::Validation(_))));
+	}
+
+	#[test]
+	fn execution_draft_rejects_multi_call_with_non_zero_value() {
+		// Arrange
+		let calls = NonEmptyCalls::new(vec![
+			approval_call(),
+			Call::builder()
+				.to(TEST_SECOND_CALL_TARGET)
+				.data(Bytes::from_static(&[0xca, 0xfe]))
+				.value(U256::from(2_u64))
+				.build(),
+		])
+		.unwrap();
+
+		// Act
+		let result = build_execution_draft(&execution_context(), calls);
+
+		// Assert
+		assert!(matches!(result, Err(PolyrelError::Validation(_))));
 	}
 }

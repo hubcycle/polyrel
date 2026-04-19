@@ -2,22 +2,38 @@
 
 use alloc::{borrow::Cow, string::String, vec::Vec};
 
+use std::time::{SystemTime, UNIX_EPOCH};
+
 use alloy_primitives::Address;
+use base64::{
+	Engine as _,
+	engine::general_purpose::{STANDARD, STANDARD_NO_PAD, URL_SAFE, URL_SAFE_NO_PAD},
+};
+use hmac::{Hmac, Mac};
 use reqwest::header::{CONTENT_TYPE, HeaderMap, HeaderName, HeaderValue};
 use secrecy::{ExposeSecret, SecretString};
 use serde::Deserialize;
+use sha2::Sha256;
 use url::Url;
 
 use crate::{PolyrelError, safe::SubmitRequest};
 
-const QUERY_ADDRESS: &str = "address";
-const QUERY_ID: &str = "id";
-const QUERY_TYPE: &str = "type";
+mod sealed {
+	use super::{HeaderMap, PolyrelError};
+
+	pub trait Authenticated {
+		fn headers(&self, method: &str, path: &str, body: &str) -> Result<HeaderMap, PolyrelError>;
+	}
+}
 
 pub struct Unauthenticated;
 
-pub struct Authenticated {
+pub struct RelayerAuthenticated {
 	auth: RelayerApiKeyAuth,
+}
+
+pub struct BuilderAuthenticated {
+	auth: BuilderAuth,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -30,6 +46,13 @@ pub enum WalletQueryKind {
 pub struct RelayerApiKeyAuth {
 	key: SecretString,
 	address: Address,
+}
+
+#[derive(Clone)]
+pub struct BuilderAuth {
+	key: SecretString,
+	secret: SecretString,
+	passphrase: SecretString,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -129,6 +152,25 @@ pub struct RelayerApiKeyRecord {
 	pub updated_at: String,
 }
 
+type HmacSha256 = Hmac<Sha256>;
+
+const QUERY_ADDRESS: &str = "address";
+const QUERY_ID: &str = "id";
+const QUERY_TYPE: &str = "type";
+const CONTENT_TYPE_JSON: &str = "application/json";
+const PATH_DEPLOYED: &[&str] = &["deployed"];
+const PATH_NONCE: &[&str] = &["nonce"];
+const PATH_RELAY_PAYLOAD: &[&str] = &["relay-payload"];
+const PATH_RELAYER_API_KEYS: &[&str] = &["relayer", "api", "keys"];
+const PATH_SUBMIT: &[&str] = &["submit"];
+const PATH_TRANSACTION: &[&str] = &["transaction"];
+const PATH_TRANSACTIONS: &[&str] = &["transactions"];
+const SCHEME_HTTP: &str = "http";
+const SCHEME_HTTPS: &str = "https";
+const REDACTED: &str = "[REDACTED]";
+const BUILDER_METHOD_POST: &str = "POST";
+const BUILDER_HEADERS_BODY_EMPTY: &str = "";
+
 impl WalletQueryKind {
 	const SAFE_KIND: &str = "SAFE";
 	const PROXY_KIND: &str = "PROXY";
@@ -160,13 +202,37 @@ impl RelayerApiKeyAuth {
 	}
 }
 
-impl RelayerBaseUrl {
-	const SCHEME_HTTP: &str = "http";
-	const SCHEME_HTTPS: &str = "https";
+impl BuilderAuth {
+	pub const HEADER_API_KEY: &str = "POLY_BUILDER_API_KEY";
+	pub const HEADER_PASSPHRASE: &str = "POLY_BUILDER_PASSPHRASE";
+	pub const HEADER_SIGNATURE: &str = "POLY_BUILDER_SIGNATURE";
+	pub const HEADER_TIMESTAMP: &str = "POLY_BUILDER_TIMESTAMP";
+	const HEADER_API_KEY_LOWER: &str = "poly_builder_api_key";
+	const HEADER_PASSPHRASE_LOWER: &str = "poly_builder_passphrase";
+	const HEADER_SIGNATURE_LOWER: &str = "poly_builder_signature";
+	const HEADER_TIMESTAMP_LOWER: &str = "poly_builder_timestamp";
 
+	pub fn new(key: SecretString, secret: SecretString, passphrase: SecretString) -> Self {
+		Self { key, secret, passphrase }
+	}
+
+	pub fn key(&self) -> &SecretString {
+		&self.key
+	}
+
+	pub fn secret(&self) -> &SecretString {
+		&self.secret
+	}
+
+	pub fn passphrase(&self) -> &SecretString {
+		&self.passphrase
+	}
+}
+
+impl RelayerBaseUrl {
 	pub fn new(mut url: Url) -> Result<Self, PolyrelError> {
 		match url.scheme() {
-			Self::SCHEME_HTTP | Self::SCHEME_HTTPS => {},
+			SCHEME_HTTP | SCHEME_HTTPS => {},
 			_ => {
 				return Err(PolyrelError::validation(
 					"relayer base url must use http or https",
@@ -215,21 +281,31 @@ impl RelayerClient<Unauthenticated> {
 		Self { base_url, http, state: Unauthenticated }
 	}
 
-	pub fn authenticate(self, auth: RelayerApiKeyAuth) -> RelayerClient<Authenticated> {
-		RelayerClient { base_url: self.base_url, http: self.http, state: Authenticated { auth } }
+	pub fn authenticate(self, auth: RelayerApiKeyAuth) -> RelayerClient<RelayerAuthenticated> {
+		self.authenticate_relayer(auth)
+	}
+
+	pub fn authenticate_relayer(
+		self,
+		auth: RelayerApiKeyAuth,
+	) -> RelayerClient<RelayerAuthenticated> {
+		RelayerClient {
+			base_url: self.base_url,
+			http: self.http,
+			state: RelayerAuthenticated { auth },
+		}
+	}
+
+	pub fn authenticate_builder(self, auth: BuilderAuth) -> RelayerClient<BuilderAuthenticated> {
+		RelayerClient {
+			base_url: self.base_url,
+			http: self.http,
+			state: BuilderAuthenticated { auth },
+		}
 	}
 }
 
 impl<S> RelayerClient<S> {
-	const CONTENT_TYPE_JSON: &str = "application/json";
-	const PATH_DEPLOYED: &'static [&'static str] = &["deployed"];
-	const PATH_NONCE: &'static [&'static str] = &["nonce"];
-	const PATH_RELAY_PAYLOAD: &'static [&'static str] = &["relay-payload"];
-	const PATH_RELAYER_API_KEYS: &'static [&'static str] = &["relayer", "api", "keys"];
-	const PATH_SUBMIT: &'static [&'static str] = &["submit"];
-	const PATH_TRANSACTION: &'static [&'static str] = &["transaction"];
-	const PATH_TRANSACTIONS: &'static [&'static str] = &["transactions"];
-
 	pub fn base_url(&self) -> &RelayerBaseUrl {
 		&self.base_url
 	}
@@ -238,7 +314,7 @@ impl<S> RelayerClient<S> {
 		&self,
 		transaction_id: &str,
 	) -> Result<Vec<RelayerTransaction>, PolyrelError> {
-		let url = self.endpoint(Self::PATH_TRANSACTION)?;
+		let url = self.endpoint(PATH_TRANSACTION)?;
 		let response = self
 			.http
 			.get(url)
@@ -255,7 +331,7 @@ impl<S> RelayerClient<S> {
 		address: Address,
 		kind: WalletQueryKind,
 	) -> Result<NonceResponse, PolyrelError> {
-		let url = self.endpoint(Self::PATH_NONCE)?;
+		let url = self.endpoint(PATH_NONCE)?;
 		let response = self
 			.http
 			.get(url)
@@ -275,7 +351,7 @@ impl<S> RelayerClient<S> {
 		address: Address,
 		kind: WalletQueryKind,
 	) -> Result<RelayPayloadResponse, PolyrelError> {
-		let url = self.endpoint(Self::PATH_RELAY_PAYLOAD)?;
+		let url = self.endpoint(PATH_RELAY_PAYLOAD)?;
 		let response = self
 			.http
 			.get(url)
@@ -296,7 +372,7 @@ impl<S> RelayerClient<S> {
 			deployed: bool,
 		}
 
-		let url = self.endpoint(Self::PATH_DEPLOYED)?;
+		let url = self.endpoint(PATH_DEPLOYED)?;
 		let response = self
 			.http
 			.get(url)
@@ -325,19 +401,25 @@ impl<S> RelayerClient<S> {
 	}
 }
 
-impl RelayerClient<Authenticated> {
-	pub fn auth(&self) -> &RelayerApiKeyAuth {
-		&self.state.auth
-	}
-
+impl<S> RelayerClient<S>
+where
+	S: sealed::Authenticated,
+{
 	pub async fn submit(&self, request: &SubmitRequest) -> Result<SubmitResponse, PolyrelError> {
-		let url = self.endpoint(Self::PATH_SUBMIT)?;
+		let url = self.endpoint(PATH_SUBMIT)?;
+		let body =
+			serde_json::to_string(request).map_err(|e| PolyrelError::serialize(e.to_string()))?;
 		let response = self
 			.http
-			.post(url)
-			.headers(auth_headers(self.auth())?)
-			.header(CONTENT_TYPE, Self::CONTENT_TYPE_JSON)
-			.json(request)
+			.post(url.clone())
+			.headers(authenticated_headers(
+				&self.state,
+				BUILDER_METHOD_POST,
+				url.path(),
+				&body,
+			)?)
+			.header(CONTENT_TYPE, CONTENT_TYPE_JSON)
+			.body(body)
 			.send()
 			.await
 			.map_err(|e| PolyrelError::http(e.to_string()))?;
@@ -346,42 +428,86 @@ impl RelayerClient<Authenticated> {
 	}
 
 	pub async fn recent_transactions(&self) -> Result<Vec<RelayerTransaction>, PolyrelError> {
-		let url = self.endpoint(Self::PATH_TRANSACTIONS)?;
+		let url = self.endpoint(PATH_TRANSACTIONS)?;
 		let response = self
 			.http
-			.get(url)
-			.headers(auth_headers(self.auth())?)
+			.get(url.clone())
+			.headers(authenticated_headers(
+				&self.state,
+				reqwest::Method::GET.as_str(),
+				url.path(),
+				BUILDER_HEADERS_BODY_EMPTY,
+			)?)
 			.send()
 			.await
 			.map_err(|e| PolyrelError::http(e.to_string()))?;
 
 		handle_response(response).await
 	}
+}
+
+impl RelayerClient<RelayerAuthenticated> {
+	pub fn auth(&self) -> &RelayerApiKeyAuth {
+		&self.state.auth
+	}
 
 	pub async fn relayer_api_keys(&self) -> Result<Vec<RelayerApiKeyRecord>, PolyrelError> {
-		let url = self.endpoint(Self::PATH_RELAYER_API_KEYS)?;
+		let url = self.endpoint(PATH_RELAYER_API_KEYS)?;
 		let response = self
 			.http
-			.get(url)
-			.headers(auth_headers(self.auth())?)
+			.get(url.clone())
+			.headers(authenticated_headers(
+				&self.state,
+				reqwest::Method::GET.as_str(),
+				url.path(),
+				BUILDER_HEADERS_BODY_EMPTY,
+			)?)
 			.send()
 			.await
 			.map_err(|e| PolyrelError::http(e.to_string()))?;
 
 		handle_response(response).await
+	}
+}
+
+impl RelayerClient<BuilderAuthenticated> {
+	pub fn auth(&self) -> &BuilderAuth {
+		&self.state.auth
 	}
 }
 
 impl core::fmt::Debug for RelayerApiKeyAuth {
 	fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
 		f.debug_struct("RelayerApiKeyAuth")
-			.field("key", &"[REDACTED]")
+			.field("key", &REDACTED)
 			.field("address", &self.address)
 			.finish()
 	}
 }
 
-fn auth_headers(auth: &RelayerApiKeyAuth) -> Result<HeaderMap, PolyrelError> {
+impl core::fmt::Debug for BuilderAuth {
+	fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+		f.debug_struct("BuilderAuth")
+			.field("key", &REDACTED)
+			.field("secret", &REDACTED)
+			.field("passphrase", &REDACTED)
+			.finish()
+	}
+}
+
+impl sealed::Authenticated for RelayerAuthenticated {
+	fn headers(&self, _method: &str, _path: &str, _body: &str) -> Result<HeaderMap, PolyrelError> {
+		relayer_headers(&self.auth)
+	}
+}
+
+impl sealed::Authenticated for BuilderAuthenticated {
+	fn headers(&self, method: &str, path: &str, body: &str) -> Result<HeaderMap, PolyrelError> {
+		builder_headers(&self.auth, method, path, body)
+	}
+}
+
+fn relayer_headers(auth: &RelayerApiKeyAuth) -> Result<HeaderMap, PolyrelError> {
 	let mut headers = HeaderMap::new();
 	let api_key_header = HeaderName::from_static(RelayerApiKeyAuth::HEADER_API_KEY_LOWER);
 	let api_key_address_header =
@@ -395,6 +521,87 @@ fn auth_headers(auth: &RelayerApiKeyAuth) -> Result<HeaderMap, PolyrelError> {
 	headers.insert(api_key_address_header, api_key_address);
 
 	Ok(headers)
+}
+
+fn builder_headers(
+	auth: &BuilderAuth,
+	method: &str,
+	path: &str,
+	body: &str,
+) -> Result<HeaderMap, PolyrelError> {
+	let timestamp = timestamp_seconds()?;
+
+	builder_headers_with_timestamp(auth, method, path, body, timestamp)
+}
+
+fn builder_headers_with_timestamp(
+	auth: &BuilderAuth,
+	method: &str,
+	path: &str,
+	body: &str,
+	timestamp: u64,
+) -> Result<HeaderMap, PolyrelError> {
+	let decoded_secret = decode_builder_secret(auth.secret().expose_secret())
+		.map_err(|e| PolyrelError::validation(e.to_string()))?;
+	let message = format!("{timestamp}{method}{path}{body}");
+	let mut mac = HmacSha256::new_from_slice(&decoded_secret)
+		.map_err(|e| PolyrelError::validation(e.to_string()))?;
+	mac.update(message.as_bytes());
+
+	let mut headers = HeaderMap::new();
+	headers.insert(
+		HeaderName::from_static(BuilderAuth::HEADER_API_KEY_LOWER),
+		HeaderValue::from_str(auth.key().expose_secret())
+			.map_err(|e| PolyrelError::validation(e.to_string()))?,
+	);
+	headers.insert(
+		HeaderName::from_static(BuilderAuth::HEADER_PASSPHRASE_LOWER),
+		HeaderValue::from_str(auth.passphrase().expose_secret())
+			.map_err(|e| PolyrelError::validation(e.to_string()))?,
+	);
+	headers.insert(
+		HeaderName::from_static(BuilderAuth::HEADER_SIGNATURE_LOWER),
+		HeaderValue::from_str(&builder_signature(mac.finalize().into_bytes().as_ref()))
+			.map_err(|e| PolyrelError::validation(e.to_string()))?,
+	);
+	headers.insert(
+		HeaderName::from_static(BuilderAuth::HEADER_TIMESTAMP_LOWER),
+		HeaderValue::from_str(&timestamp.to_string())
+			.map_err(|e| PolyrelError::validation(e.to_string()))?,
+	);
+
+	Ok(headers)
+}
+
+fn decode_builder_secret(secret: &str) -> Result<Vec<u8>, base64::DecodeError> {
+	STANDARD
+		.decode(secret.as_bytes())
+		.or_else(|_| STANDARD_NO_PAD.decode(secret.as_bytes()))
+		.or_else(|_| URL_SAFE.decode(secret.as_bytes()))
+		.or_else(|_| URL_SAFE_NO_PAD.decode(secret.as_bytes()))
+}
+
+fn builder_signature(raw: &[u8]) -> String {
+	STANDARD.encode(raw).replace('+', "-").replace('/', "_")
+}
+
+fn authenticated_headers<S>(
+	state: &S,
+	method: &str,
+	path: &str,
+	body: &str,
+) -> Result<HeaderMap, PolyrelError>
+where
+	S: sealed::Authenticated,
+{
+	<S as sealed::Authenticated>::headers(state, method, path, body)
+}
+
+fn timestamp_seconds() -> Result<u64, PolyrelError> {
+	SystemTime::now()
+		.duration_since(UNIX_EPOCH)
+		.map(|duration| duration.as_secs())
+		.map_err(|e| PolyrelError::validation(e.to_string()))
 }
 
 fn address_string(address: Address) -> String {
@@ -424,11 +631,10 @@ mod tests {
 	use secrecy::SecretString;
 	use wiremock::{
 		Mock, MockServer, ResponseTemplate,
-		matchers::{body_json, header, method, path, query_param},
+		matchers::{body_json, header, header_exists, method, path, query_param},
 	};
 
 	use super::*;
-
 	use crate::safe::{
 		ChainId, FactoryDomainName, SafeCreateContext, SafeCreatePayment, build_create_draft,
 	};
@@ -449,13 +655,90 @@ mod tests {
 	const API_KEY_RECORD: &str = "01967c03-b8c8-7000-8f68-8b8eaec6fd3d";
 	const API_KEY_TIMESTAMP: &str = "2026-02-24T18:20:11.237485Z";
 	const MOCK_STATE_NEW: &str = "STATE_NEW";
+	const BUILDER_KEY: &str = "builder-key";
+	const BUILDER_SECRET: &str = "dGVzdC1zZWNyZXQ=";
+	const BUILDER_PASSPHRASE: &str = "builder-pass";
+	const BUILDER_TIMESTAMP: u64 = 1_710_000_000;
+	const BUILDER_PATH: &str = "/submit";
+	const BUILDER_BODY: &str = "{\"x\":1}";
+	const BUILDER_EXPECTED_SIGNATURE: &str = "NLXH0LVQnqYXcPQJHppZ1dS1TUMqkGFrmfMrIcYCTJY=";
 
 	fn base_url(server: &MockServer) -> RelayerBaseUrl {
 		RelayerBaseUrl::parse(Cow::Owned(server.uri())).unwrap()
 	}
 
-	fn auth() -> RelayerApiKeyAuth {
+	fn relayer_auth() -> RelayerApiKeyAuth {
 		RelayerApiKeyAuth::new(SecretString::from(AUTH_KEY), AUTH_ADDRESS)
+	}
+
+	fn builder_auth() -> BuilderAuth {
+		BuilderAuth::new(
+			SecretString::from(BUILDER_KEY),
+			SecretString::from(BUILDER_SECRET),
+			SecretString::from(BUILDER_PASSPHRASE),
+		)
+	}
+
+	#[test]
+	fn builder_auth_debug_redacts_secrets() {
+		// Arrange
+		let auth = builder_auth();
+
+		// Act
+		let debug = format!("{auth:?}");
+
+		// Assert
+		assert!(!debug.contains(BUILDER_KEY));
+		assert!(!debug.contains(BUILDER_SECRET));
+		assert!(!debug.contains(BUILDER_PASSPHRASE));
+		assert!(debug.contains(REDACTED));
+	}
+
+	#[test]
+	fn builder_headers_are_deterministic_for_fixed_inputs() {
+		// Arrange
+		let auth = builder_auth();
+
+		// Act
+		let headers = builder_headers_with_timestamp(
+			&auth,
+			BUILDER_METHOD_POST,
+			BUILDER_PATH,
+			BUILDER_BODY,
+			BUILDER_TIMESTAMP,
+		)
+		.unwrap();
+
+		// Assert
+		assert_eq!(
+			headers.get(BuilderAuth::HEADER_API_KEY_LOWER).unwrap().to_str().unwrap(),
+			BUILDER_KEY
+		);
+		assert_eq!(
+			headers.get(BuilderAuth::HEADER_PASSPHRASE_LOWER).unwrap().to_str().unwrap(),
+			BUILDER_PASSPHRASE
+		);
+		assert_eq!(
+			headers.get(BuilderAuth::HEADER_SIGNATURE_LOWER).unwrap().to_str().unwrap(),
+			BUILDER_EXPECTED_SIGNATURE
+		);
+		assert_eq!(
+			headers.get(BuilderAuth::HEADER_TIMESTAMP_LOWER).unwrap().to_str().unwrap(),
+			&BUILDER_TIMESTAMP.to_string()
+		);
+	}
+
+	#[test]
+	fn relayer_api_key_debug_redacts_key() {
+		// Arrange
+		let auth = relayer_auth();
+
+		// Act
+		let debug = format!("{auth:?}");
+
+		// Assert
+		assert!(!debug.contains(AUTH_KEY));
+		assert!(debug.contains(REDACTED));
 	}
 
 	#[tokio::test]
@@ -551,7 +834,7 @@ mod tests {
 	}
 
 	#[tokio::test]
-	async fn submit_sends_auth_headers_and_body() {
+	async fn submit_sends_relayer_auth_headers_and_body() {
 		// Arrange
 		let server = MockServer::start().await;
 		let request = build_create_draft(
@@ -587,7 +870,7 @@ mod tests {
 			})))
 			.mount(&server)
 			.await;
-		let client = RelayerClient::new(base_url(&server)).authenticate(auth());
+		let client = RelayerClient::new(base_url(&server)).authenticate_relayer(relayer_auth());
 
 		// Act
 		let response = client.submit(&request).await.unwrap();
@@ -597,7 +880,53 @@ mod tests {
 	}
 
 	#[tokio::test]
-	async fn recent_transactions_sends_auth_headers() {
+	async fn submit_sends_builder_auth_headers_and_body() {
+		// Arrange
+		let server = MockServer::start().await;
+		let request = build_create_draft(
+			&SafeCreateContext::builder()
+				.owner(AUTH_ADDRESS)
+				.chain_id(ChainId::new(137.try_into().unwrap()))
+				.safe_factory(SAFE_FACTORY)
+				.safe_init_code_hash(SAFE_INIT_CODE_HASH)
+				.factory_domain_name(FactoryDomainName::new(FACTORY_DOMAIN_NAME.into()).unwrap())
+				.build(),
+			&SafeCreatePayment::builder()
+				.payment_token(Address::ZERO)
+				.payment(U256::ZERO)
+				.payment_receiver(Address::ZERO)
+				.build(),
+		)
+		.into_submit_request({
+			let mut bytes = [0xbb; 65];
+			bytes[64] = 27;
+			Signature::from_raw_array(&bytes).unwrap()
+		});
+		Mock::given(method(Method::POST.as_str()))
+			.and(path("/submit"))
+			.and(header(BuilderAuth::HEADER_API_KEY, BUILDER_KEY))
+			.and(header(BuilderAuth::HEADER_PASSPHRASE, BUILDER_PASSPHRASE))
+			.and(header_exists(BuilderAuth::HEADER_TIMESTAMP))
+			.and(header_exists(BuilderAuth::HEADER_SIGNATURE))
+			.and(body_json(&request))
+			.respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+				"transactionID": SUBMIT_TRANSACTION_ID,
+				"state": MOCK_STATE_NEW
+			})))
+			.mount(&server)
+			.await;
+		let client = RelayerClient::with_http(base_url(&server), reqwest::Client::new())
+			.authenticate_builder(builder_auth());
+
+		// Act
+		let response = client.submit(&request).await.unwrap();
+
+		// Assert
+		assert_eq!(response.transaction_id, SUBMIT_TRANSACTION_ID);
+	}
+
+	#[tokio::test]
+	async fn recent_transactions_sends_relayer_auth_headers() {
 		// Arrange
 		let server = MockServer::start().await;
 		Mock::given(method(Method::GET.as_str()))
@@ -611,7 +940,35 @@ mod tests {
 			])))
 			.mount(&server)
 			.await;
-		let client = RelayerClient::new(base_url(&server)).authenticate(auth());
+		let client = RelayerClient::new(base_url(&server)).authenticate_relayer(relayer_auth());
+
+		// Act
+		let response = client.recent_transactions().await.unwrap();
+
+		// Assert
+		assert_eq!(response.len(), 1);
+		assert_eq!(response[0].transaction_id, RECENT_TRANSACTION_ID);
+	}
+
+	#[tokio::test]
+	async fn recent_transactions_sends_builder_auth_headers() {
+		// Arrange
+		let server = MockServer::start().await;
+		Mock::given(method(Method::GET.as_str()))
+			.and(path("/transactions"))
+			.and(header(BuilderAuth::HEADER_API_KEY, BUILDER_KEY))
+			.and(header(BuilderAuth::HEADER_PASSPHRASE, BUILDER_PASSPHRASE))
+			.and(header_exists(BuilderAuth::HEADER_TIMESTAMP))
+			.and(header_exists(BuilderAuth::HEADER_SIGNATURE))
+			.respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+				{
+					"transactionID": RECENT_TRANSACTION_ID,
+					"state": MOCK_STATE_NEW
+				}
+			])))
+			.mount(&server)
+			.await;
+		let client = RelayerClient::new(base_url(&server)).authenticate_builder(builder_auth());
 
 		// Act
 		let response = client.recent_transactions().await.unwrap();
@@ -638,7 +995,7 @@ mod tests {
 			])))
 			.mount(&server)
 			.await;
-		let client = RelayerClient::new(base_url(&server)).authenticate(auth());
+		let client = RelayerClient::new(base_url(&server)).authenticate_relayer(relayer_auth());
 
 		// Act
 		let response = client.relayer_api_keys().await.unwrap();
