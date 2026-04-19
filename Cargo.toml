@@ -21,7 +21,7 @@ wildcard_imports = "deny"
 [features]
 default = []
 std = ["alloy-primitives/std", "alloy-sol-types/std"]
-client = ["std", "dep:base64", "dep:hmac", "dep:reqwest", "dep:secrecy", "dep:serde_json", "dep:sha2", "dep:url"]
+client = ["std", "dep:base64", "dep:hmac", "dep:reqwest", "dep:secrecy", "dep:serde_json", "dep:sha2", "dep:time", "dep:url", "dep:uuid"]
 
 [dependencies]
 alloy-primitives = { version = "1.5", default-features = false }
@@ -34,8 +34,10 @@ secrecy = { version = "0.10", optional = true }
 serde = { version = "1", default-features = false, features = ["alloc", "derive"] }
 serde_json = { version = "1", default-features = false, features = ["alloc"], optional = true }
 sha2 = { version = "0.10", default-features = false, optional = true }
+time = { version = "0.3", default-features = false, features = ["parsing"], optional = true }
 thiserror = { version = "2", default-features = false }
 url = { version = "2.5", optional = true }
+uuid = { version = "1", default-features = false, features = ["std"], optional = true }
 
 [dev-dependencies]
 rstest = { version = "0.26.1", default-features = false }

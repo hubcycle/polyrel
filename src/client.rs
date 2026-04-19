@@ -1,10 +1,14 @@
 #![cfg(feature = "client")]
 
+mod dto;
+
 use alloc::{borrow::Cow, string::String, vec::Vec};
+
+use core::str::FromStr;
 
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use alloy_primitives::Address;
+use alloy_primitives::{Address, B256, Bytes, U256};
 use base64::{
 	Engine as _,
 	engine::general_purpose::{STANDARD, STANDARD_NO_PAD, URL_SAFE, URL_SAFE_NO_PAD},
@@ -14,7 +18,9 @@ use reqwest::header::{CONTENT_TYPE, HeaderMap, HeaderName, HeaderValue};
 use secrecy::{ExposeSecret, SecretString};
 use serde::Deserialize;
 use sha2::Sha256;
+use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 use url::Url;
+use uuid::Uuid;
 
 use crate::{PolyrelError, safe::SubmitRequest};
 
@@ -66,90 +72,76 @@ pub struct RelayerClient<State = Unauthenticated> {
 	state: State,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-pub struct NonceResponse {
-	pub nonce: String,
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RelayerTransactionState {
+	New,
+	Executed,
+	Mined,
+	Confirmed,
+	Failed,
+	Invalid,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-pub struct RelayPayloadResponse {
-	pub address: String,
-	pub nonce: String,
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RelayerTransactionKind {
+	Safe,
+	SafeCreate,
+	Proxy,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-pub struct SubmitResponse {
-	#[serde(rename = "transactionID")]
-	pub transaction_id: String,
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TransactionId(Uuid);
 
-	pub state: String,
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RelayerApiKeyId(Uuid);
 
-	#[serde(default)]
-	pub hash: Option<String>,
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TransactionMetadata(Cow<'static, str>);
 
-	#[serde(rename = "transactionHash", default)]
-	pub transaction_hash: Option<String>,
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CurrentNonce {
+	nonce: U256,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RelayPayload {
+	address: Address,
+	nonce: U256,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SubmittedTransaction {
+	transaction_id: TransactionId,
+	state: RelayerTransactionState,
+	hash: Option<B256>,
+	transaction_hash: Option<B256>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RelayerTransaction {
-	#[serde(rename = "transactionID")]
-	pub transaction_id: String,
-
-	#[serde(rename = "transactionHash", default)]
-	pub transaction_hash: Option<String>,
-
-	#[serde(default)]
-	pub from: Option<String>,
-
-	#[serde(default)]
-	pub to: Option<String>,
-
-	#[serde(rename = "proxyAddress", default)]
-	pub proxy_address: Option<String>,
-
-	#[serde(default)]
-	pub data: Option<String>,
-
-	#[serde(default)]
-	pub nonce: Option<String>,
-
-	#[serde(default)]
-	pub value: Option<String>,
-
-	pub state: String,
-
-	#[serde(rename = "type", default)]
-	pub transaction_type: Option<String>,
-
-	#[serde(default)]
-	pub metadata: Option<String>,
-
-	#[serde(default)]
-	pub signature: Option<String>,
-
-	#[serde(default)]
-	pub owner: Option<String>,
-
-	#[serde(rename = "createdAt", default)]
-	pub created_at: Option<String>,
-
-	#[serde(rename = "updatedAt", default)]
-	pub updated_at: Option<String>,
+	transaction_id: TransactionId,
+	transaction_hash: Option<B256>,
+	from: Option<Address>,
+	to: Option<Address>,
+	proxy_address: Option<Address>,
+	data: Option<Bytes>,
+	nonce: Option<U256>,
+	value: Option<U256>,
+	state: RelayerTransactionState,
+	transaction_kind: Option<RelayerTransactionKind>,
+	metadata: Option<TransactionMetadata>,
+	signature: Option<Bytes>,
+	owner: Option<Address>,
+	created_at: Option<OffsetDateTime>,
+	updated_at: Option<OffsetDateTime>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-pub struct RelayerApiKeyRecord {
-	#[serde(rename = "apiKey")]
-	pub api_key: String,
-
-	pub address: String,
-
-	#[serde(rename = "createdAt")]
-	pub created_at: String,
-
-	#[serde(rename = "updatedAt")]
-	pub updated_at: String,
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RelayerApiKey {
+	api_key_id: RelayerApiKeyId,
+	address: Address,
+	created_at: OffsetDateTime,
+	updated_at: OffsetDateTime,
 }
 
 type HmacSha256 = Hmac<Sha256>;
@@ -170,6 +162,186 @@ const SCHEME_HTTPS: &str = "https";
 const REDACTED: &str = "[REDACTED]";
 const BUILDER_METHOD_POST: &str = "POST";
 const BUILDER_HEADERS_BODY_EMPTY: &str = "";
+
+impl RelayerTransactionState {
+	const CONFIRMED_STATE: &str = "STATE_CONFIRMED";
+	const EXECUTED_STATE: &str = "STATE_EXECUTED";
+	const FAILED_STATE: &str = "STATE_FAILED";
+	const INVALID_STATE: &str = "STATE_INVALID";
+	const MINED_STATE: &str = "STATE_MINED";
+	const NEW_STATE: &str = "STATE_NEW";
+
+	pub fn as_str(&self) -> &'static str {
+		match self {
+			Self::New => Self::NEW_STATE,
+			Self::Executed => Self::EXECUTED_STATE,
+			Self::Mined => Self::MINED_STATE,
+			Self::Confirmed => Self::CONFIRMED_STATE,
+			Self::Failed => Self::FAILED_STATE,
+			Self::Invalid => Self::INVALID_STATE,
+		}
+	}
+
+	pub fn is_terminal(&self) -> bool {
+		matches!(self, Self::Confirmed | Self::Failed | Self::Invalid)
+	}
+}
+
+impl RelayerTransactionKind {
+	const PROXY_KIND: &str = "PROXY";
+	const SAFE_CREATE_KIND: &str = "SAFE-CREATE";
+	const SAFE_KIND: &str = "SAFE";
+
+	pub fn as_str(&self) -> &'static str {
+		match self {
+			Self::Safe => Self::SAFE_KIND,
+			Self::SafeCreate => Self::SAFE_CREATE_KIND,
+			Self::Proxy => Self::PROXY_KIND,
+		}
+	}
+}
+
+impl TransactionId {
+	pub fn raw(&self) -> Uuid {
+		self.0
+	}
+}
+
+impl RelayerApiKeyId {
+	pub fn raw(&self) -> Uuid {
+		self.0
+	}
+}
+
+impl TransactionMetadata {
+	pub fn new(value: Cow<'static, str>) -> Result<Self, PolyrelError> {
+		if value.is_empty() {
+			return Err(PolyrelError::deserialize(
+				"transaction metadata must not be empty",
+			));
+		}
+
+		Ok(Self(value))
+	}
+
+	pub fn as_str(&self) -> &str {
+		self.0.as_ref()
+	}
+}
+
+impl CurrentNonce {
+	pub fn nonce(&self) -> U256 {
+		self.nonce
+	}
+}
+
+impl RelayPayload {
+	pub fn address(&self) -> Address {
+		self.address
+	}
+
+	pub fn nonce(&self) -> U256 {
+		self.nonce
+	}
+}
+
+impl SubmittedTransaction {
+	pub fn transaction_id(&self) -> TransactionId {
+		self.transaction_id
+	}
+
+	pub fn state(&self) -> RelayerTransactionState {
+		self.state
+	}
+
+	pub fn hash(&self) -> Option<B256> {
+		self.hash
+	}
+
+	pub fn transaction_hash(&self) -> Option<B256> {
+		self.transaction_hash
+	}
+}
+
+impl RelayerTransaction {
+	pub fn transaction_id(&self) -> TransactionId {
+		self.transaction_id
+	}
+
+	pub fn transaction_hash(&self) -> Option<B256> {
+		self.transaction_hash
+	}
+
+	pub fn from(&self) -> Option<Address> {
+		self.from
+	}
+
+	pub fn to(&self) -> Option<Address> {
+		self.to
+	}
+
+	pub fn proxy_address(&self) -> Option<Address> {
+		self.proxy_address
+	}
+
+	pub fn data(&self) -> Option<&Bytes> {
+		self.data.as_ref()
+	}
+
+	pub fn nonce(&self) -> Option<U256> {
+		self.nonce
+	}
+
+	pub fn value(&self) -> Option<U256> {
+		self.value
+	}
+
+	pub fn state(&self) -> RelayerTransactionState {
+		self.state
+	}
+
+	pub fn transaction_kind(&self) -> Option<RelayerTransactionKind> {
+		self.transaction_kind
+	}
+
+	pub fn metadata(&self) -> Option<&TransactionMetadata> {
+		self.metadata.as_ref()
+	}
+
+	pub fn signature(&self) -> Option<&Bytes> {
+		self.signature.as_ref()
+	}
+
+	pub fn owner(&self) -> Option<Address> {
+		self.owner
+	}
+
+	pub fn created_at(&self) -> Option<&OffsetDateTime> {
+		self.created_at.as_ref()
+	}
+
+	pub fn updated_at(&self) -> Option<&OffsetDateTime> {
+		self.updated_at.as_ref()
+	}
+}
+
+impl RelayerApiKey {
+	pub fn api_key_id(&self) -> RelayerApiKeyId {
+		self.api_key_id
+	}
+
+	pub fn address(&self) -> Address {
+		self.address
+	}
+
+	pub fn created_at(&self) -> &OffsetDateTime {
+		&self.created_at
+	}
+
+	pub fn updated_at(&self) -> &OffsetDateTime {
+		&self.updated_at
+	}
+}
 
 impl WalletQueryKind {
 	const SAFE_KIND: &str = "SAFE";
@@ -323,14 +495,16 @@ impl<S> RelayerClient<S> {
 			.await
 			.map_err(|e| PolyrelError::http(e.to_string()))?;
 
-		handle_response(response).await
+		let transactions: Vec<dto::RelayerTransaction> = handle_response(response).await?;
+
+		transactions.into_iter().map(RelayerTransaction::try_from).collect()
 	}
 
 	pub async fn current_nonce(
 		&self,
 		address: Address,
 		kind: WalletQueryKind,
-	) -> Result<NonceResponse, PolyrelError> {
+	) -> Result<CurrentNonce, PolyrelError> {
 		let url = self.endpoint(PATH_NONCE)?;
 		let response = self
 			.http
@@ -343,14 +517,16 @@ impl<S> RelayerClient<S> {
 			.await
 			.map_err(|e| PolyrelError::http(e.to_string()))?;
 
-		handle_response(response).await
+		let nonce: dto::NonceResponse = handle_response(response).await?;
+
+		CurrentNonce::try_from(nonce)
 	}
 
 	pub async fn relay_payload(
 		&self,
 		address: Address,
 		kind: WalletQueryKind,
-	) -> Result<RelayPayloadResponse, PolyrelError> {
+	) -> Result<RelayPayload, PolyrelError> {
 		let url = self.endpoint(PATH_RELAY_PAYLOAD)?;
 		let response = self
 			.http
@@ -363,7 +539,9 @@ impl<S> RelayerClient<S> {
 			.await
 			.map_err(|e| PolyrelError::http(e.to_string()))?;
 
-		handle_response(response).await
+		let payload: dto::RelayPayloadResponse = handle_response(response).await?;
+
+		RelayPayload::try_from(payload)
 	}
 
 	pub async fn is_safe_deployed(&self, address: Address) -> Result<bool, PolyrelError> {
@@ -405,7 +583,10 @@ impl<S> RelayerClient<S>
 where
 	S: sealed::Authenticated,
 {
-	pub async fn submit(&self, request: &SubmitRequest) -> Result<SubmitResponse, PolyrelError> {
+	pub async fn submit(
+		&self,
+		request: &SubmitRequest,
+	) -> Result<SubmittedTransaction, PolyrelError> {
 		let url = self.endpoint(PATH_SUBMIT)?;
 		let body =
 			serde_json::to_string(request).map_err(|e| PolyrelError::serialize(e.to_string()))?;
@@ -424,7 +605,9 @@ where
 			.await
 			.map_err(|e| PolyrelError::http(e.to_string()))?;
 
-		handle_response(response).await
+		let submitted: dto::SubmitResponse = handle_response(response).await?;
+
+		SubmittedTransaction::try_from(submitted)
 	}
 
 	pub async fn recent_transactions(&self) -> Result<Vec<RelayerTransaction>, PolyrelError> {
@@ -442,7 +625,9 @@ where
 			.await
 			.map_err(|e| PolyrelError::http(e.to_string()))?;
 
-		handle_response(response).await
+		let transactions: Vec<dto::RelayerTransaction> = handle_response(response).await?;
+
+		transactions.into_iter().map(RelayerTransaction::try_from).collect()
 	}
 }
 
@@ -451,7 +636,7 @@ impl RelayerClient<RelayerAuthenticated> {
 		&self.state.auth
 	}
 
-	pub async fn relayer_api_keys(&self) -> Result<Vec<RelayerApiKeyRecord>, PolyrelError> {
+	pub async fn relayer_api_keys(&self) -> Result<Vec<RelayerApiKey>, PolyrelError> {
 		let url = self.endpoint(PATH_RELAYER_API_KEYS)?;
 		let response = self
 			.http
@@ -466,7 +651,9 @@ impl RelayerClient<RelayerAuthenticated> {
 			.await
 			.map_err(|e| PolyrelError::http(e.to_string()))?;
 
-		handle_response(response).await
+		let api_keys: Vec<dto::RelayerApiKeyRecord> = handle_response(response).await?;
+
+		api_keys.into_iter().map(RelayerApiKey::try_from).collect()
 	}
 }
 
@@ -492,6 +679,114 @@ impl core::fmt::Debug for BuilderAuth {
 			.field("secret", &REDACTED)
 			.field("passphrase", &REDACTED)
 			.finish()
+	}
+}
+
+impl FromStr for RelayerTransactionState {
+	type Err = PolyrelError;
+
+	fn from_str(s: &str) -> Result<Self, Self::Err> {
+		match s {
+			Self::NEW_STATE => Ok(Self::New),
+			Self::EXECUTED_STATE => Ok(Self::Executed),
+			Self::MINED_STATE => Ok(Self::Mined),
+			Self::CONFIRMED_STATE => Ok(Self::Confirmed),
+			Self::FAILED_STATE => Ok(Self::Failed),
+			Self::INVALID_STATE => Ok(Self::Invalid),
+			_ => Err(PolyrelError::deserialize(format!(
+				"unknown transaction state: {s}",
+			))),
+		}
+	}
+}
+
+impl FromStr for RelayerTransactionKind {
+	type Err = PolyrelError;
+
+	fn from_str(s: &str) -> Result<Self, Self::Err> {
+		match s {
+			Self::SAFE_KIND => Ok(Self::Safe),
+			Self::SAFE_CREATE_KIND => Ok(Self::SafeCreate),
+			Self::PROXY_KIND => Ok(Self::Proxy),
+			_ => Err(PolyrelError::deserialize(format!(
+				"unknown transaction kind: {s}",
+			))),
+		}
+	}
+}
+
+impl TryFrom<dto::NonceResponse> for CurrentNonce {
+	type Error = PolyrelError;
+
+	fn try_from(value: dto::NonceResponse) -> Result<Self, Self::Error> {
+		Ok(Self { nonce: parse_required_u256(&value.nonce, "nonce")? })
+	}
+}
+
+impl TryFrom<dto::RelayPayloadResponse> for RelayPayload {
+	type Error = PolyrelError;
+
+	fn try_from(value: dto::RelayPayloadResponse) -> Result<Self, Self::Error> {
+		Ok(Self {
+			address: parse_required_address(&value.address, "address")?,
+			nonce: parse_required_u256(&value.nonce, "nonce")?,
+		})
+	}
+}
+
+impl TryFrom<dto::SubmitResponse> for SubmittedTransaction {
+	type Error = PolyrelError;
+
+	fn try_from(value: dto::SubmitResponse) -> Result<Self, Self::Error> {
+		Ok(Self {
+			transaction_id: TransactionId(parse_required_uuid(
+				&value.transaction_id,
+				"transactionID",
+			)?),
+			state: parse_required_state(&value.state)?,
+			hash: parse_optional_b256(value.hash, "hash")?,
+			transaction_hash: parse_optional_b256(value.transaction_hash, "transactionHash")?,
+		})
+	}
+}
+
+impl TryFrom<dto::RelayerTransaction> for RelayerTransaction {
+	type Error = PolyrelError;
+
+	fn try_from(value: dto::RelayerTransaction) -> Result<Self, Self::Error> {
+		Ok(Self {
+			transaction_id: TransactionId(parse_required_uuid(
+				&value.transaction_id,
+				"transactionID",
+			)?),
+			transaction_hash: parse_optional_b256(value.transaction_hash, "transactionHash")?,
+			from: parse_optional_address(value.from, "from")?,
+			to: parse_optional_address(value.to, "to")?,
+			proxy_address: parse_optional_address(value.proxy_address, "proxyAddress")?,
+			data: parse_optional_bytes(value.data, "data")?,
+			nonce: parse_optional_u256(value.nonce, "nonce")?,
+			value: parse_optional_u256(value.value, "value")?,
+			state: parse_required_state(&value.state)?,
+			transaction_kind: parse_optional_transaction_kind(value.transaction_type)?,
+			metadata: parse_optional_metadata(value.metadata)?,
+			signature: parse_optional_bytes(value.signature, "signature")?,
+			owner: parse_optional_address(value.owner, "owner")?,
+			created_at: parse_optional_timestamp(value.created_at, "createdAt")?,
+			updated_at: parse_optional_timestamp(value.updated_at, "updatedAt")?,
+		})
+	}
+}
+
+impl TryFrom<dto::RelayerApiKeyRecord> for RelayerApiKey {
+	type Error = PolyrelError;
+
+	fn try_from(value: dto::RelayerApiKeyRecord) -> Result<Self, Self::Error> {
+		Ok(Self {
+			api_key_id: RelayerApiKeyId(parse_required_uuid(&value.api_key, "apiKey")?),
+			address: parse_required_address(&value.address, "address")?,
+			created_at: parse_required_timestamp(&value.created_at, "createdAt")?,
+			updated_at: parse_required_timestamp(&value.updated_at, "updatedAt")?,
+		})
 	}
 }
 
@@ -604,6 +899,100 @@ fn timestamp_seconds() -> Result<u64, PolyrelError> {
 		.map_err(|e| PolyrelError::validation(e.to_string()))
 }
 
+fn parse_required_state(value: &str) -> Result<RelayerTransactionState, PolyrelError> {
+	required_non_empty(value, "state")?.parse()
+}
+
+fn parse_required_address(value: &str, field: &str) -> Result<Address, PolyrelError> {
+	required_non_empty(value, field)?
+		.parse()
+		.map_err(|e| PolyrelError::deserialize(format!("invalid {field}: {e}")))
+}
+
+fn parse_optional_address(
+	value: Option<String>,
+	field: &str,
+) -> Result<Option<Address>, PolyrelError> {
+	normalize_optional_string(value).map(|value| parse_required_address(&value, field)).transpose()
+}
+
+fn parse_optional_b256(value: Option<String>, field: &str) -> Result<Option<B256>, PolyrelError> {
+	normalize_optional_string(value)
+		.map(|value| {
+			B256::from_str(&value)
+				.map_err(|e| PolyrelError::deserialize(format!("invalid {field}: {e}")))
+		})
+		.transpose()
+}
+
+fn parse_optional_bytes(value: Option<String>, field: &str) -> Result<Option<Bytes>, PolyrelError> {
+	normalize_optional_string(value).map(|value| parse_required_bytes(&value, field)).transpose()
+}
+
+fn parse_required_bytes(value: &str, field: &str) -> Result<Bytes, PolyrelError> {
+	let raw = required_non_empty(value, field)?.strip_prefix("0x").unwrap_or(value);
+	let decoded = alloy_primitives::hex::decode(raw)
+		.map_err(|e| PolyrelError::deserialize(format!("invalid {field}: {e}")))?;
+
+	Ok(Bytes::from(decoded))
+}
+
+fn parse_required_timestamp(value: &str, field: &str) -> Result<OffsetDateTime, PolyrelError> {
+	OffsetDateTime::parse(required_non_empty(value, field)?, &Rfc3339)
+		.map_err(|e| PolyrelError::deserialize(format!("invalid {field}: {e}")))
+}
+
+fn parse_optional_timestamp(
+	value: Option<String>,
+	field: &str,
+) -> Result<Option<OffsetDateTime>, PolyrelError> {
+	normalize_optional_string(value)
+		.map(|value| parse_required_timestamp(&value, field))
+		.transpose()
+}
+
+fn parse_required_u256(value: &str, field: &str) -> Result<U256, PolyrelError> {
+	U256::from_str(required_non_empty(value, field)?)
+		.map_err(|e| PolyrelError::deserialize(format!("invalid {field}: {e}")))
+}
+
+fn parse_optional_u256(value: Option<String>, field: &str) -> Result<Option<U256>, PolyrelError> {
+	normalize_optional_string(value).map(|value| parse_required_u256(&value, field)).transpose()
+}
+
+fn parse_required_uuid(value: &str, field: &str) -> Result<Uuid, PolyrelError> {
+	Uuid::parse_str(required_non_empty(value, field)?)
+		.map_err(|e| PolyrelError::deserialize(format!("invalid {field}: {e}")))
+}
+
+fn parse_optional_transaction_kind(
+	value: Option<String>,
+) -> Result<Option<RelayerTransactionKind>, PolyrelError> {
+	normalize_optional_string(value).map(|value| value.parse()).transpose()
+}
+
+fn parse_optional_metadata(
+	value: Option<String>,
+) -> Result<Option<TransactionMetadata>, PolyrelError> {
+	normalize_optional_string(value)
+		.map(|value| TransactionMetadata::new(Cow::Owned(value)))
+		.transpose()
+}
+
+fn normalize_optional_string(value: Option<String>) -> Option<String> {
+	value.filter(|value| !value.is_empty())
+}
+
+fn required_non_empty<'a>(value: &'a str, field: &str) -> Result<&'a str, PolyrelError> {
+	if value.is_empty() {
+		return Err(PolyrelError::deserialize(format!(
+			"{field} must not be empty",
+		)));
+	}
+
+	Ok(value)
+}
+
 fn address_string(address: Address) -> String {
 	format!("{address:#x}")
 }
@@ -629,6 +1018,8 @@ mod tests {
 	use alloy_primitives::{B256, Signature, U256, address, b256};
 	use reqwest::Method;
 	use secrecy::SecretString;
+	use time::{OffsetDateTime, format_description::well_known::Rfc3339};
+	use uuid::Uuid;
 	use wiremock::{
 		Mock, MockServer, ResponseTemplate,
 		matchers::{body_json, header, header_exists, method, path, query_param},
@@ -649,9 +1040,9 @@ mod tests {
 	const NONCE_VALUE: &str = "12";
 	const RELAY_PAYLOAD_ADDRESS: &str = "0x1111111111111111111111111111111111111111";
 	const RELAY_PAYLOAD_NONCE: &str = "9";
-	const TRANSACTION_ID: &str = "tx-123";
-	const SUBMIT_TRANSACTION_ID: &str = "tx-submit";
-	const RECENT_TRANSACTION_ID: &str = "tx-1";
+	const TRANSACTION_ID: &str = "01967c03-b8c8-7000-8f68-8b8eaec6fd3d";
+	const SUBMIT_TRANSACTION_ID: &str = "01967c03-b8c8-7000-8f68-8b8eaec6fd3e";
+	const RECENT_TRANSACTION_ID: &str = "01967c03-b8c8-7000-8f68-8b8eaec6fd3f";
 	const API_KEY_RECORD: &str = "01967c03-b8c8-7000-8f68-8b8eaec6fd3d";
 	const API_KEY_TIMESTAMP: &str = "2026-02-24T18:20:11.237485Z";
 	const MOCK_STATE_NEW: &str = "STATE_NEW";
@@ -677,6 +1068,50 @@ mod tests {
 			SecretString::from(BUILDER_SECRET),
 			SecretString::from(BUILDER_PASSPHRASE),
 		)
+	}
+
+	fn relayer_transaction_dto() -> dto::RelayerTransaction {
+		dto::RelayerTransaction {
+			transaction_id: TRANSACTION_ID.to_owned(),
+			transaction_hash: Some(
+				"0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_owned(),
+			),
+			from: Some(format!("{AUTH_ADDRESS:#x}")),
+			to: Some(format!("{SAFE_FACTORY:#x}")),
+			proxy_address: Some(format!("{SAFE_ADDRESS:#x}")),
+			data: Some("0xdeadbeef".to_owned()),
+			nonce: Some("12".to_owned()),
+			value: Some("34".to_owned()),
+			state: RelayerTransactionState::CONFIRMED_STATE.to_owned(),
+			transaction_type: Some(RelayerTransactionKind::SAFE_CREATE_KIND.to_owned()),
+			metadata: Some("builder metadata".to_owned()),
+			signature: Some("0x1234".to_owned()),
+			owner: Some(format!("{AUTH_ADDRESS:#x}")),
+			created_at: Some(API_KEY_TIMESTAMP.to_owned()),
+			updated_at: Some(API_KEY_TIMESTAMP.to_owned()),
+		}
+	}
+
+	fn submit_response_dto() -> dto::SubmitResponse {
+		dto::SubmitResponse {
+			transaction_id: SUBMIT_TRANSACTION_ID.to_owned(),
+			state: RelayerTransactionState::MINED_STATE.to_owned(),
+			hash: Some(
+				"0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".to_owned(),
+			),
+			transaction_hash: Some(
+				"0xcccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc".to_owned(),
+			),
+		}
+	}
+
+	fn relayer_api_key_dto() -> dto::RelayerApiKeyRecord {
+		dto::RelayerApiKeyRecord {
+			api_key: API_KEY_RECORD.to_owned(),
+			address: format!("{AUTH_ADDRESS:#x}"),
+			created_at: API_KEY_TIMESTAMP.to_owned(),
+			updated_at: API_KEY_TIMESTAMP.to_owned(),
+		}
 	}
 
 	#[test]
@@ -760,7 +1195,7 @@ mod tests {
 		let response = client.current_nonce(AUTH_ADDRESS, WalletQueryKind::Safe).await.unwrap();
 
 		// Assert
-		assert_eq!(response.nonce, NONCE_VALUE);
+		assert_eq!(response.nonce(), U256::from(12_u64));
 	}
 
 	#[tokio::test]
@@ -783,8 +1218,11 @@ mod tests {
 		let response = client.relay_payload(AUTH_ADDRESS, WalletQueryKind::Proxy).await.unwrap();
 
 		// Assert
-		assert_eq!(response.address, RELAY_PAYLOAD_ADDRESS);
-		assert_eq!(response.nonce, RELAY_PAYLOAD_NONCE);
+		assert_eq!(
+			response.address(),
+			RELAY_PAYLOAD_ADDRESS.parse::<Address>().unwrap()
+		);
+		assert_eq!(response.nonce(), U256::from(9_u64));
 	}
 
 	#[tokio::test]
@@ -830,7 +1268,11 @@ mod tests {
 
 		// Assert
 		assert_eq!(response.len(), 1);
-		assert_eq!(response[0].transaction_id, TRANSACTION_ID);
+		assert_eq!(
+			response[0].transaction_id().raw(),
+			Uuid::parse_str(TRANSACTION_ID).unwrap()
+		);
+		assert_eq!(response[0].state(), RelayerTransactionState::New);
 	}
 
 	#[tokio::test]
@@ -876,7 +1318,11 @@ mod tests {
 		let response = client.submit(&request).await.unwrap();
 
 		// Assert
-		assert_eq!(response.transaction_id, SUBMIT_TRANSACTION_ID);
+		assert_eq!(
+			response.transaction_id().raw(),
+			Uuid::parse_str(SUBMIT_TRANSACTION_ID).unwrap()
+		);
+		assert_eq!(response.state(), RelayerTransactionState::New);
 	}
 
 	#[tokio::test]
@@ -922,7 +1368,11 @@ mod tests {
 		let response = client.submit(&request).await.unwrap();
 
 		// Assert
-		assert_eq!(response.transaction_id, SUBMIT_TRANSACTION_ID);
+		assert_eq!(
+			response.transaction_id().raw(),
+			Uuid::parse_str(SUBMIT_TRANSACTION_ID).unwrap()
+		);
+		assert_eq!(response.state(), RelayerTransactionState::New);
 	}
 
 	#[tokio::test]
@@ -947,7 +1397,10 @@ mod tests {
 
 		// Assert
 		assert_eq!(response.len(), 1);
-		assert_eq!(response[0].transaction_id, RECENT_TRANSACTION_ID);
+		assert_eq!(
+			response[0].transaction_id().raw(),
+			Uuid::parse_str(RECENT_TRANSACTION_ID).unwrap()
+		);
 	}
 
 	#[tokio::test]
@@ -975,7 +1428,10 @@ mod tests {
 
 		// Assert
 		assert_eq!(response.len(), 1);
-		assert_eq!(response[0].transaction_id, RECENT_TRANSACTION_ID);
+		assert_eq!(
+			response[0].transaction_id().raw(),
+			Uuid::parse_str(RECENT_TRANSACTION_ID).unwrap()
+		);
 	}
 
 	#[tokio::test]
@@ -988,7 +1444,7 @@ mod tests {
 			.respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
 				{
 					"apiKey": API_KEY_RECORD,
-					"address": "0xabc",
+					"address": format!("{AUTH_ADDRESS:#x}"),
 					"createdAt": API_KEY_TIMESTAMP,
 					"updatedAt": API_KEY_TIMESTAMP
 				}
@@ -1002,6 +1458,276 @@ mod tests {
 
 		// Assert
 		assert_eq!(response.len(), 1);
-		assert_eq!(response[0].api_key, API_KEY_RECORD);
+		assert_eq!(
+			response[0].api_key_id().raw(),
+			Uuid::parse_str(API_KEY_RECORD).unwrap()
+		);
+		assert_eq!(response[0].address(), AUTH_ADDRESS);
+		assert_eq!(
+			*response[0].created_at(),
+			OffsetDateTime::parse(API_KEY_TIMESTAMP, &Rfc3339).unwrap()
+		);
+	}
+
+	#[test]
+	fn relayer_transaction_state_matches_documented_variants() {
+		// Arrange
+		let terminal_states = [
+			RelayerTransactionState::Confirmed,
+			RelayerTransactionState::Failed,
+			RelayerTransactionState::Invalid,
+		];
+		let non_terminal_states = [
+			RelayerTransactionState::New,
+			RelayerTransactionState::Executed,
+			RelayerTransactionState::Mined,
+		];
+
+		// Act / Assert
+		assert_eq!(
+			RelayerTransactionState::from_str(RelayerTransactionState::NEW_STATE).unwrap(),
+			RelayerTransactionState::New
+		);
+		assert_eq!(
+			RelayerTransactionState::from_str(RelayerTransactionState::EXECUTED_STATE).unwrap(),
+			RelayerTransactionState::Executed
+		);
+		assert_eq!(
+			RelayerTransactionState::from_str(RelayerTransactionState::MINED_STATE).unwrap(),
+			RelayerTransactionState::Mined
+		);
+		assert_eq!(
+			RelayerTransactionState::from_str(RelayerTransactionState::CONFIRMED_STATE).unwrap(),
+			RelayerTransactionState::Confirmed
+		);
+		assert_eq!(
+			RelayerTransactionState::from_str(RelayerTransactionState::FAILED_STATE).unwrap(),
+			RelayerTransactionState::Failed
+		);
+		assert_eq!(
+			RelayerTransactionState::from_str(RelayerTransactionState::INVALID_STATE).unwrap(),
+			RelayerTransactionState::Invalid
+		);
+		assert!(terminal_states.into_iter().all(|state| state.is_terminal()));
+		assert!(non_terminal_states.into_iter().all(|state| !state.is_terminal()));
+	}
+
+	#[test]
+	fn relayer_transaction_kind_matches_documented_variants() {
+		// Act / Assert
+		assert_eq!(
+			RelayerTransactionKind::from_str(RelayerTransactionKind::SAFE_KIND).unwrap(),
+			RelayerTransactionKind::Safe
+		);
+		assert_eq!(
+			RelayerTransactionKind::from_str(RelayerTransactionKind::SAFE_CREATE_KIND).unwrap(),
+			RelayerTransactionKind::SafeCreate
+		);
+		assert_eq!(
+			RelayerTransactionKind::from_str(RelayerTransactionKind::PROXY_KIND).unwrap(),
+			RelayerTransactionKind::Proxy
+		);
+	}
+
+	#[test]
+	fn relayer_transaction_converts_structured_fields() {
+		// Arrange
+		let dto = relayer_transaction_dto();
+
+		// Act
+		let transaction = RelayerTransaction::try_from(dto).unwrap();
+
+		// Assert
+		assert_eq!(
+			transaction.transaction_id().raw(),
+			Uuid::parse_str(TRANSACTION_ID).unwrap()
+		);
+		assert_eq!(
+			transaction.transaction_hash(),
+			Some(
+				B256::from_str(
+					"0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+				)
+				.unwrap()
+			)
+		);
+		assert_eq!(transaction.from(), Some(AUTH_ADDRESS));
+		assert_eq!(transaction.to(), Some(SAFE_FACTORY));
+		assert_eq!(transaction.proxy_address(), Some(SAFE_ADDRESS));
+		assert_eq!(
+			transaction.data(),
+			Some(&Bytes::from(vec![0xde, 0xad, 0xbe, 0xef]))
+		);
+		assert_eq!(transaction.nonce(), Some(U256::from(12_u64)));
+		assert_eq!(transaction.value(), Some(U256::from(34_u64)));
+		assert_eq!(transaction.state(), RelayerTransactionState::Confirmed);
+		assert_eq!(
+			transaction.transaction_kind(),
+			Some(RelayerTransactionKind::SafeCreate)
+		);
+		assert_eq!(transaction.metadata().unwrap().as_str(), "builder metadata");
+		assert_eq!(
+			transaction.signature(),
+			Some(&Bytes::from(vec![0x12, 0x34]))
+		);
+		assert_eq!(transaction.owner(), Some(AUTH_ADDRESS));
+		assert_eq!(
+			*transaction.created_at().unwrap(),
+			OffsetDateTime::parse(API_KEY_TIMESTAMP, &Rfc3339).unwrap()
+		);
+	}
+
+	#[test]
+	fn relayer_transaction_normalizes_optional_empty_fields_to_none() {
+		// Arrange
+		let mut dto = relayer_transaction_dto();
+		dto.transaction_hash = Some(String::new());
+		dto.from = Some(String::new());
+		dto.to = Some(String::new());
+		dto.proxy_address = Some(String::new());
+		dto.data = Some(String::new());
+		dto.nonce = Some(String::new());
+		dto.value = Some(String::new());
+		dto.transaction_type = Some(String::new());
+		dto.metadata = Some(String::new());
+		dto.signature = Some(String::new());
+		dto.owner = Some(String::new());
+		dto.created_at = Some(String::new());
+		dto.updated_at = Some(String::new());
+
+		// Act
+		let transaction = RelayerTransaction::try_from(dto).unwrap();
+
+		// Assert
+		assert_eq!(transaction.transaction_hash(), None);
+		assert_eq!(transaction.from(), None);
+		assert_eq!(transaction.to(), None);
+		assert_eq!(transaction.proxy_address(), None);
+		assert_eq!(transaction.data(), None);
+		assert_eq!(transaction.nonce(), None);
+		assert_eq!(transaction.value(), None);
+		assert_eq!(transaction.transaction_kind(), None);
+		assert_eq!(transaction.metadata(), None);
+		assert_eq!(transaction.signature(), None);
+		assert_eq!(transaction.owner(), None);
+		assert_eq!(transaction.created_at(), None);
+		assert_eq!(transaction.updated_at(), None);
+	}
+
+	#[test]
+	fn submitted_transaction_rejects_invalid_uuid() {
+		// Arrange
+		let mut dto = submit_response_dto();
+		dto.transaction_id = "not-a-uuid".to_owned();
+
+		// Act
+		let result = SubmittedTransaction::try_from(dto);
+
+		// Assert
+		assert!(matches!(result, Err(PolyrelError::Deserialize(_))));
+	}
+
+	#[test]
+	fn relayer_transaction_rejects_invalid_address() {
+		// Arrange
+		let mut dto = relayer_transaction_dto();
+		dto.from = Some("not-an-address".to_owned());
+
+		// Act
+		let result = RelayerTransaction::try_from(dto);
+
+		// Assert
+		assert!(matches!(result, Err(PolyrelError::Deserialize(_))));
+	}
+
+	#[test]
+	fn relayer_transaction_rejects_invalid_hash() {
+		// Arrange
+		let mut dto = relayer_transaction_dto();
+		dto.transaction_hash = Some("0x1234".to_owned());
+
+		// Act
+		let result = RelayerTransaction::try_from(dto);
+
+		// Assert
+		assert!(matches!(result, Err(PolyrelError::Deserialize(_))));
+	}
+
+	#[test]
+	fn relayer_transaction_rejects_invalid_hex_payload() {
+		// Arrange
+		let mut dto = relayer_transaction_dto();
+		dto.data = Some("0xnothex".to_owned());
+
+		// Act
+		let result = RelayerTransaction::try_from(dto);
+
+		// Assert
+		assert!(matches!(result, Err(PolyrelError::Deserialize(_))));
+	}
+
+	#[test]
+	fn relayer_transaction_rejects_invalid_u256() {
+		// Arrange
+		let mut dto = relayer_transaction_dto();
+		dto.nonce = Some("not-a-number".to_owned());
+
+		// Act
+		let result = RelayerTransaction::try_from(dto);
+
+		// Assert
+		assert!(matches!(result, Err(PolyrelError::Deserialize(_))));
+	}
+
+	#[test]
+	fn relayer_transaction_rejects_invalid_timestamp() {
+		// Arrange
+		let mut dto = relayer_transaction_dto();
+		dto.created_at = Some("not-a-timestamp".to_owned());
+
+		// Act
+		let result = RelayerTransaction::try_from(dto);
+
+		// Assert
+		assert!(matches!(result, Err(PolyrelError::Deserialize(_))));
+	}
+
+	#[test]
+	fn relayer_transaction_rejects_unknown_state() {
+		// Arrange
+		let mut dto = relayer_transaction_dto();
+		dto.state = "STATE_UNKNOWN".to_owned();
+
+		// Act
+		let result = RelayerTransaction::try_from(dto);
+
+		// Assert
+		assert!(matches!(result, Err(PolyrelError::Deserialize(_))));
+	}
+
+	#[test]
+	fn relayer_transaction_rejects_unknown_transaction_kind() {
+		// Arrange
+		let mut dto = relayer_transaction_dto();
+		dto.transaction_type = Some("UNKNOWN".to_owned());
+
+		// Act
+		let result = RelayerTransaction::try_from(dto);
+
+		// Assert
+		assert!(matches!(result, Err(PolyrelError::Deserialize(_))));
+	}
+
+	#[test]
+	fn relayer_api_key_rejects_empty_required_field() {
+		// Arrange
+		let mut dto = relayer_api_key_dto();
+		dto.created_at = String::new();
+
+		// Act
+		let result = RelayerApiKey::try_from(dto);
+
+		// Assert
+		assert!(matches!(result, Err(PolyrelError::Deserialize(_))));
 	}
 }
