@@ -1,77 +1,80 @@
-//! Crate error types.
+use alloc::borrow::Cow;
 
-use std::borrow::Cow;
-
-/// Errors produced by this crate.
+/// Error type for payload construction and relayer client operations.
 #[derive(Debug, thiserror::Error)]
 pub enum PolyrelError {
-	/// HTTP transport failure.
+	/// Validation failed before a payload or request could be constructed.
+	#[error("validation error: {0}")]
+	Validation(Cow<'static, str>),
+
+	/// A [`crate::NonEmptyCalls`] collection was constructed from an empty vector.
+	#[error("empty calls error")]
+	EmptyCalls,
+
+	/// A signature was malformed or incompatible with the expected format.
+	#[error("invalid signature: {0}")]
+	InvalidSignature(Cow<'static, str>),
+
+	/// Serialization into a JSON or wire-format representation failed.
+	#[error("serialization error: {0}")]
+	Serialize(Cow<'static, str>),
+
+	/// Deserialization or DTO-to-domain conversion failed.
+	#[error("deserialization error: {0}")]
+	Deserialize(Cow<'static, str>),
+
+	/// The underlying HTTP client returned a transport-level error.
 	#[error("http error: {0}")]
 	Http(Cow<'static, str>),
 
-	/// Non-success status from the API.
+	/// The relayer returned a non-success HTTP response.
 	#[error("api error {status}: {body}")]
 	Api {
-		/// HTTP status code.
+		/// HTTP status code returned by the relayer.
 		status: u16,
-
-		/// Response body.
+		/// Response body returned by the relayer.
 		body: Cow<'static, str>,
 	},
-
-	/// Rate limited by the API (HTTP 429).
-	#[error("rate limit error")]
-	RateLimited,
-
-	/// JSON deserialization failure.
-	#[error("deserialize error: {0}")]
-	Deserialize(Cow<'static, str>),
-
-	/// Signing failure.
-	#[error("signing error: {0}")]
-	Signing(Cow<'static, str>),
-
-	/// Invalid signature format.
-	#[error("invalid signature error: {0}")]
-	InvalidSignature(Cow<'static, str>),
-
-	/// A required numeric field could not be parsed.
-	#[error("invalid numeric field {field}: {value}")]
-	InvalidNumericField {
-		/// Field name.
-		field: &'static str,
-
-		/// Raw value that failed to parse.
-		value: Cow<'static, str>,
-	},
-
-	/// Invalid header value for authentication.
-	#[error("invalid auth header {header}: {detail}")]
-	InvalidAuthHeader {
-		/// Header name.
-		header: &'static str,
-
-		/// Detail.
-		detail: Cow<'static, str>,
-	},
-
-	/// Batch must contain at least one transaction.
-	#[error("empty transaction batch error")]
-	EmptyBatch,
-
-	/// Safe wallet is already deployed.
-	#[error("safe already deployed error")]
-	SafeAlreadyDeployed,
 }
 
-impl From<reqwest::Error> for PolyrelError {
-	fn from(err: reqwest::Error) -> Self {
-		Self::Http(Cow::Owned(err.to_string()))
+impl PolyrelError {
+	/// Creates a [`Self::Validation`] error.
+	pub fn validation<E>(msg: E) -> Self
+	where
+		Cow<'static, str>: From<E>,
+	{
+		Self::Validation(Cow::from(msg))
 	}
-}
 
-impl From<serde_json::Error> for PolyrelError {
-	fn from(err: serde_json::Error) -> Self {
-		Self::Deserialize(Cow::Owned(err.to_string()))
+	/// Creates an [`Self::InvalidSignature`] error.
+	pub fn invalid_signature<E>(msg: E) -> Self
+	where
+		Cow<'static, str>: From<E>,
+	{
+		Self::InvalidSignature(Cow::from(msg))
+	}
+
+	/// Creates a [`Self::Serialize`] error.
+	pub fn serialize<E>(msg: E) -> Self
+	where
+		Cow<'static, str>: From<E>,
+	{
+		Self::Serialize(Cow::from(msg))
+	}
+
+	/// Creates a [`Self::Deserialize`] error.
+	pub fn deserialize<E>(msg: E) -> Self
+	where
+		Cow<'static, str>: From<E>,
+	{
+		Self::Deserialize(Cow::from(msg))
+	}
+
+	/// Creates an [`Self::Http`] error.
+	pub fn http<E>(msg: E) -> Self
+	where
+		Cow<'static, str>: From<E>,
+	{
+		Self::Http(Cow::from(msg))
 	}
 }

@@ -1,8 +1,8 @@
 [package]
 name = "polyrel"
-version = "0.2.1"
+version = "0.3.0"
 edition = "2024"
-rust-version = "1.94.1"
+rust-version = "1.95"
 description = "Unofficial Polymarket relayer client"
 license = "Apache-2.0 OR MIT"
 readme = "README.md"
@@ -13,29 +13,35 @@ keywords = ["polymarket", "relayer", "gasless", "ethereum", "polygon"]
 categories = ["api-bindings"]
 
 [lints.rust]
-unsafe_code = "forbid"
 missing_docs = "deny"
+unsafe_code = "forbid"
 
 [lints.clippy]
 wildcard_imports = "deny"
 
+[features]
+default = []
+std = ["alloy-primitives/std", "alloy-sol-types/std"]
+client = ["std", "dep:base64", "dep:hmac", "dep:reqwest", "dep:secrecy", "dep:serde_json", "dep:sha2", "dep:time", "dep:url", "dep:uuid"]
+
 [dependencies]
-alloy-primitives = { version = "1.5", features = ["serde"] }
-alloy-signer = "1.8"
-alloy-sol-types = "1.5"
-base64 = "0.22"
-bon = "3.9"
-hmac = "0.13"
-reqwest = { version = "0.13", features = ["json", "query"] }
-secrecy = "0.10"
-serde = { version = "1.0", features = ["derive"] }
-serde_json = "1.0"
-sha2 = "0.11"
-thiserror = "2.0"
-tokio = { version = "1.51", features = ["time"] }
-url = "2.5"
+alloy-primitives = { version = "1.5", default-features = false }
+alloy-sol-types = { version = "1.5", default-features = false }
+base64 = { version = "0.22", default-features = false, features = ["alloc"], optional = true }
+bon = { version = "3", default-features = false }
+hmac = { version = "0.12", default-features = false, optional = true }
+reqwest = { version = "0.13", default-features = false, features = ["json", "query", "rustls"], optional = true }
+secrecy = { version = "0.10", optional = true }
+serde = { version = "1", default-features = false, features = ["alloc", "derive"] }
+serde_json = { version = "1", default-features = false, features = ["alloc"], optional = true }
+sha2 = { version = "0.10", default-features = false, optional = true }
+time = { version = "0.3", default-features = false, features = ["parsing"], optional = true }
+thiserror = { version = "2", default-features = false }
+url = { version = "2.5", optional = true }
+uuid = { version = "1", default-features = false, features = ["std"], optional = true }
 
 [dev-dependencies]
-alloy-signer-local = "1.8"
-tokio = { version = "1.51", features = ["macros", "rt-multi-thread"] }
-wiremock = "0.6"
+rstest = { version = "0.26.1", default-features = false }
+serde_json = { version = "1.0.149", default-features = false, features = ["alloc"] }
+tokio = { version = "1.51.1", features = ["macros", "rt-multi-thread"] }
+wiremock = "0.6.5"

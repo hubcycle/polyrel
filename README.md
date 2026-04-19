@@ -1,7 +1,6 @@
 # polyrel
 
-Unofficial Polymarket relayer client.
+Unofficial Polymarket relayer toolkit for building gasless Safe payloads and,
+optionally, submitting them through the relayer API.
 
 Dual-licensed under [Apache 2.0](LICENSE-APACHE) or [MIT](LICENSE-MIT).
-
-For more details, see [docs.rs/polyrel](https://docs.rs/polyrel).

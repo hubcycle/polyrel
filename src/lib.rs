@@ -1,237 +1,93 @@
-//! Unofficial Polymarket relayer client for gasless transactions.
+#![cfg_attr(not(feature = "std"), no_std)]
+//! Typed building blocks for Polymarket relayer payloads.
 //!
-//! This crate provides a typed Rust client for the
-//! [Polymarket relayer API](https://docs.polymarket.com/trading/gasless),
-//! enabling gasless on-chain operations through Safe and Proxy wallets.
+//! The crate is split into two layers:
 //!
-//! # Client construction
+//! - generic calldata builders in modules like [`erc20`], [`erc1155`], and [`ctf`]
+//! - Safe-specific payload construction in [`safe`]
 //!
-//! The client uses a typestate pattern: start unauthenticated, then
-//! attach credentials to unlock submission methods.
+//! The optional [`client`] module adds a raw relayer HTTP client behind the
+//! `client` feature.
 //!
-//! ```
-//! use polyrel::{RelayerClient, Auth, BuilderCredentials};
-//! use secrecy::SecretString;
+//! # Examples
 //!
-//! let client = RelayerClient::builder()
-//!     .build()
-//!     .expect("default config is valid");
-//!
-//! let auth = Auth::Builder(BuilderCredentials {
-//!     api_key: SecretString::from("key"),
-//!     secret: SecretString::from("c2VjcmV0"),
-//!     passphrase: SecretString::from("pass"),
-//! });
-//! let client = client.authenticate(auth);
-//! ```
-//!
-//! Override defaults for testnets or custom deployments. When
-//! pointing at a non-Polygon deployment, override all contract
-//! addresses and init-code hashes that differ — `base_url` and
-//! `chain_id` alone are not sufficient:
-//!
-//! ```
-//! use alloy_primitives::{address, B256};
-//! use polyrel::RelayerClient;
-//!
-//! let client = RelayerClient::builder()
-//!     .base_url("https://relayer-testnet.example.com".into())
-//!     .chain_id(80002_u64)
-//!     .safe_factory(address!("aacFeEa03eb1561C4e67d661e40682Bd20E3541b"))
-//!     .safe_multisend(address!("A238CBeb142c10Ef7Ad8442C6D1f9E89e07e7761"))
-//!     .safe_init_code_hash(B256::from(polyrel::SAFE_INIT_CODE_HASH))
-//!     .build()
-//!     .expect("valid config");
-//! ```
-//!
-//! # Wallet address derivation
-//!
-//! Derive deterministic Safe or Proxy wallet addresses from an owner
-//! and factory using CREATE2:
-//!
-//! ```
-//! use alloy_primitives::{address, Address, B256};
-//! use polyrel::{derive_safe_address, derive_proxy_address};
-//!
-//! let owner = address!("d8dA6BF26964aF9D7eEd9e03E53415D37aA96045");
-//! let safe_factory = address!("aacFeEa03eb1561C4e67d661e40682Bd20E3541b");
-//! let proxy_factory = address!("aB45c5A4B0c941a2F231C04C3f49182e1A254052");
-//! let safe_hash = B256::from(polyrel::SAFE_INIT_CODE_HASH);
-//! let proxy_hash = B256::from(polyrel::PROXY_INIT_CODE_HASH);
-//!
-//! let safe_addr = derive_safe_address(owner, safe_factory, safe_hash);
-//! let proxy_addr = derive_proxy_address(owner, proxy_factory, proxy_hash);
-//!
-//! assert_ne!(safe_addr, Address::ZERO);
-//! assert_ne!(proxy_addr, Address::ZERO);
-//! ```
-//!
-//! # Configuration
-//!
-//! [`Config`] holds all contract addresses, init-code hashes, and the
-//! relayer base URL. It defaults to Polygon mainnet values and can be
-//! inspected after construction:
-//!
-//! ```
-//! use polyrel::Config;
-//!
-//! let config = Config::builder().build().unwrap();
-//! assert_eq!(config.chain_id(), 137);
-//! assert_eq!(config.base_url().scheme(), "https");
-//! ```
-//!
-//! # Batch approvals with MultiSend
-//!
-//! Combine multiple approvals into a single relayer transaction using
-//! the public calldata builders and [`aggregate_transactions`]:
-//!
-//! ```
-//! use alloy_primitives::U256;
-//! use polyrel::{Config, NonEmptyTransactions, OperationType, SafeTransaction};
-//!
-//! let config = Config::builder().build().unwrap();
-//!
-//! let (to1, data1) = polyrel::usdc_approve_exchange(&config, U256::MAX);
-//! let (to2, data2) = polyrel::ctf_approve_exchange(&config);
-//!
-//! let tx1 = SafeTransaction {
-//!     to: to1,
-//!     value: U256::ZERO,
-//!     data: data1.to_vec(),
-//!     operation: OperationType::Call,
-//! };
-//! let tx2 = SafeTransaction {
-//!     to: to2,
-//!     value: U256::ZERO,
-//!     data: data2.to_vec(),
-//!     operation: OperationType::Call,
-//! };
-//!
-//! let batch = NonEmptyTransactions::new(vec![tx1, tx2]).unwrap();
-//! let combined = polyrel::aggregate_transactions(batch, config.safe_multisend());
-//!
-//! assert_eq!(combined.operation, OperationType::DelegateCall);
-//! assert_eq!(combined.to, config.safe_multisend());
-//! ```
-//!
-//! Then submit with
-//! `client.sign_and_submit_safe(&signer, combined, nonce).await`.
-//!
-//! # Safe signature packing
-//!
-//! Raw ECDSA signatures must be packed into Safe's expected format
-//! before submission. The v-value is adjusted: `0/1 → +31`, `27/28 → +4`.
-//!
-//! ```
-//! use polyrel::pack_safe_signature;
-//!
-//! // 64 bytes of r+s, then v=27
-//! let mut sig = vec![0xaa; 64];
-//! sig.push(27);
-//! let hex = alloy_primitives::hex::encode(&sig);
-//!
-//! let packed = pack_safe_signature(&hex).unwrap();
-//! let bytes = alloy_primitives::hex::decode(packed.strip_prefix("0x").unwrap()).unwrap();
-//! assert_eq!(bytes[64], 31); // 27 + 4
-//! ```
-//!
-//! # Submitting transactions
-//!
-//! Authenticated clients can sign and submit Safe transactions. The
-//! Safe address is derived automatically from the signer and factory:
+//! Build a gasless Safe execution draft for an ERC-20 approval:
 //!
 //! ```no_run
-//! use polyrel::{RelayerClient, Auth, BuilderCredentials};
+//! use alloy_primitives::{Address, U256, address, b256};
+//! use polyrel::{
+//!     NonEmptyCalls, erc20,
+//!     safe::{self, ChainId, SafeExecutionContext, SafeGasParams, SafeNonce},
+//! };
+//!
+//! let call = erc20::approve(
+//!     address!("2791Bca1f2de4661ED88A30C99A7a9449Aa84174"),
+//!     address!("4d97dcd97ec945f40cf65f87097ace5ea0476045"),
+//!     U256::from(1_000_000_u64),
+//! );
+//! let context = SafeExecutionContext::builder()
+//!     .owner(address!("6e0c80c90ea6c15917308f820eac91ce2724b5b5"))
+//!     .chain_id(ChainId::new(137.try_into().unwrap()))
+//!     .safe_factory(address!("aacfeea03eb1561c4e67d661e40682bd20e3541b"))
+//!     .safe_init_code_hash(
+//!         b256!("2bce2127ff07fb632d16c8347c4ebf501f4841168bed00d9e6ef715ddb6fcecf"),
+//!     )
+//!     .safe_multisend(address!("a238cbeb142c10ef7ad8442c6d1f9e89e07e7761"))
+//!     .nonce(SafeNonce::new(U256::ZERO))
+//!     .gas_params(
+//!         SafeGasParams::builder()
+//!             .safe_txn_gas(U256::ZERO)
+//!             .base_gas(U256::ZERO)
+//!             .gas_price(U256::ZERO)
+//!             .gas_token(Address::ZERO)
+//!             .refund_receiver(Address::ZERO)
+//!             .build(),
+//!     )
+//!     .build();
+//! let _draft = safe::build_execution_draft(&context, NonEmptyCalls::from_one(call)).unwrap();
+//! ```
+//!
+//! Create a relayer client when the `client` feature is enabled:
+//!
+//! ```no_run
+//! # #[cfg(feature = "client")]
+//! # async fn demo() -> Result<(), polyrel::PolyrelError> {
+//! use alloy_primitives::address;
+//! use polyrel::client::{RelayerApiKeyAuth, RelayerBaseUrl, RelayerClient};
 //! use secrecy::SecretString;
-//! use alloy_primitives::U256;
-//! use alloy_signer::Signer;
 //!
-//! async fn run(signer: &(impl Signer + Sync)) -> Result<(), polyrel::PolyrelError> {
-//!     let client = RelayerClient::builder().build()?
-//!         .authenticate(Auth::Builder(BuilderCredentials {
-//!             api_key: SecretString::from("key"),
-//!             secret: SecretString::from("c2VjcmV0"),
-//!             passphrase: SecretString::from("pass"),
-//!         }));
-//!
-//!     // fetch the current nonce for this signer's Safe wallet
-//!     let nonce_str = client.safe_nonce(signer.address()).await?;
-//!     let nonce = nonce_str.parse::<U256>().expect("valid nonce");
-//!
-//!     // approve USDC for the CTF Exchange
-//!     let resp = client
-//!         .approve_usdc_for_exchange(signer, U256::MAX, nonce)
-//!         .await?;
-//!
-//!     // poll until confirmed
-//!     let txn = client
-//!         .poll_until_state(
-//!             &resp.transaction_id,
-//!             &["STATE_MINED", "STATE_CONFIRMED"],
-//!             Some("STATE_FAILED"),
-//!             None,
-//!             None,
-//!         )
-//!         .await?;
-//!     Ok(())
-//! }
+//! let base_url = RelayerBaseUrl::parse("https://relayer-v2.polymarket.com")?;
+//! let _client = RelayerClient::new(base_url).authenticate_relayer(RelayerApiKeyAuth::new(
+//!     SecretString::from("replace-me"),
+//!     address!("6e0c80c90ea6c15917308f820eac91ce2724b5b5"),
+//! ));
+//! # Ok(())
+//! # }
+//! ```
 
-mod auth;
-mod client;
+extern crate alloc;
+
+/// Raw Polymarket relayer HTTP client and authenticated transport helpers.
+pub mod client;
+/// Conditional Tokens Framework calldata builders.
+pub mod ctf;
+/// ERC-1155 calldata builders.
+pub mod erc1155;
+/// ERC-20 calldata builders.
+pub mod erc20;
+/// Neg-risk adapter calldata builders.
+pub mod neg_risk;
+/// Polymarket-specific approval recipes built on top of the generic token helpers.
+pub mod polymarket;
+/// Safe-specific payload construction for deployment and execution requests.
+pub mod safe;
+
+mod call;
 mod error;
-mod sign;
-mod types;
 
-pub use auth::{Auth, BuilderCredentials, RelayerApiKey};
-pub use client::{Authenticated, RelayerClient, Unauthenticated};
+/// Generic EVM call envelope used throughout the crate.
+pub use call::Call;
+/// Non-empty collection of [`Call`] values.
+pub use call::NonEmptyCalls;
+/// Error type used by the crate.
 pub use error::PolyrelError;
-pub use sign::{
-	Call, NonEmptyProxyCalls, NonEmptyTransactions, ProxyTransactionArgs, SafeTransaction,
-	aggregate_transactions, ctf_approve_exchange, ctf_approve_neg_risk_adapter,
-	ctf_approve_neg_risk_exchange, ctf_merge_positions, ctf_redeem_positions,
-	ctf_split_position, ctf_transfer, derive_proxy_address, derive_safe_address,
-	encode_proxy_calls, neg_risk_redeem_positions, pack_safe_signature, safe_tx_hash,
-	sign_proxy_transaction, usdc_approve_conditional_tokens, usdc_approve_exchange,
-	usdc_approve_neg_risk_adapter, usdc_approve_neg_risk_exchange, usdc_transfer,
-};
-pub use types::{
-	Config, DeployedResponse, OperationType, RelayerInfo, RelayerTransaction, SignatureParams,
-	SubmitRequest, SubmitResponse, TransactionState, WalletType,
-};
-
-use alloy_primitives::{Address, address};
-
-/// Safe factory EIP-712 domain name for `CreateProxy` typed data.
-pub const SAFE_FACTORY_NAME: &str = "Polymarket Contract Proxy Factory";
-
-pub(crate) const CHAIN_ID: u64 = 137;
-pub(crate) const RELAYER_BASE_URL: &str = "https://relayer-v2.polymarket.com";
-
-pub(crate) const CTF_EXCHANGE: Address = address!("4bFb41d5B3570DeFd03C39a9A4D8dE6Bd8B8982E");
-
-pub(crate) const NEG_RISK_CTF_EXCHANGE: Address =
-	address!("C5d563A36AE78145C45a50134d48A1215220f80a");
-
-pub(crate) const NEG_RISK_ADAPTER: Address = address!("d91E80cF2E7be2e162c6513ceD06f1dD0dA35296");
-
-pub(crate) const CONDITIONAL_TOKENS: Address = address!("4D97DCd97eC945f40cF65F87097ACe5EA0476045");
-
-pub(crate) const USDC_E: Address = address!("2791Bca1f2de4661ED88A30C99A7a9449Aa84174");
-
-pub(crate) const PROXY_WALLET_FACTORY: Address =
-	address!("aB45c5A4B0c941a2F231C04C3f49182e1A254052");
-
-pub(crate) const RELAY_HUB: Address = address!("D216153c06E857cD7f72665E0aF1d7D82172F494");
-
-/// Gnosis Safe Factory (Polygon mainnet default).
-pub const SAFE_FACTORY: Address = address!("aacFeEa03eb1561C4e67d661e40682Bd20E3541b");
-
-pub(crate) const SAFE_MULTISEND: Address = address!("A238CBeb142c10Ef7Ad8442C6D1f9E89e07e7761");
-
-/// Safe init code hash for CREATE2 derivation (Polygon mainnet default).
-pub const SAFE_INIT_CODE_HASH: [u8; 32] =
-	alloy_primitives::hex!("2bce2127ff07fb632d16c8347c4ebf501f4841168bed00d9e6ef715ddb6fcecf");
-
-/// Proxy init code hash for CREATE2 derivation (Polygon mainnet default).
-pub const PROXY_INIT_CODE_HASH: [u8; 32] =
-	alloy_primitives::hex!("d21df8dc65880a8606f09fe0ce3df9b8869287ab0b058be05aa9e8af6330a00b");
