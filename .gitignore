@@ -1,3 +1,4 @@
 AGENT.md
 Cargo.lock
-target/
+**/target
+runner

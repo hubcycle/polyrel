@@ -4,6 +4,7 @@
 //! The crate is split into two layers:
 //!
 //! - generic calldata builders in modules like [`erc20`], [`erc1155`], and [`ctf`]
+//! - Polymarket V2 collateral helpers in [`collateral`]
 //! - Safe-specific payload construction in [`safe`]
 //!
 //! The optional [`client`] module adds a raw relayer HTTP client behind the
@@ -69,16 +70,25 @@ extern crate alloc;
 
 /// Raw Polymarket relayer HTTP client and authenticated transport helpers.
 pub mod client;
+
+/// Polymarket V2 pUSD collateral helpers.
+pub mod collateral;
+
 /// Conditional Tokens Framework calldata builders.
 pub mod ctf;
+
 /// ERC-1155 calldata builders.
 pub mod erc1155;
+
 /// ERC-20 calldata builders.
 pub mod erc20;
+
 /// Neg-risk adapter calldata builders.
 pub mod neg_risk;
+
 /// Polymarket-specific approval recipes built on top of the generic token helpers.
 pub mod polymarket;
+
 /// Safe-specific payload construction for deployment and execution requests.
 pub mod safe;
 
@@ -87,7 +97,9 @@ mod error;
 
 /// Generic EVM call envelope used throughout the crate.
 pub use call::Call;
+
 /// Non-empty collection of [`Call`] values.
 pub use call::NonEmptyCalls;
+
 /// Error type used by the crate.
 pub use error::PolyrelError;

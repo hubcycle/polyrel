@@ -1,3 +1,13 @@
+## [0.3.1] - 2026-04-22
+
+### features
+
+- add v2 collateral builders
+
+### miscellaneous
+
+- update gitignore
+- bump version to v0.3.1
 ## [0.3.0] - 2026-04-19
 
 ### features
@@ -14,10 +24,12 @@
 - [**breaking**] wrap remaining primitives in newtypes and fix module item ordering
 - [**breaking**] reset crate for safe-first redesign
 - [**breaking**] replace public client dto types with domain models
+- align module usage
 
 ### documentation
 
 - add public api documentation
+- update changelog for 0.3.0
 
 ### testing
 
@@ -27,6 +39,7 @@
 
 - run cargo fmt and add PolyrelError Cow-payload constructors
 - bump version to 0.3.0-alpha
+- remove client_submit.rs example
 ## [0.2.1] - 2026-04-11
 
 ### features
