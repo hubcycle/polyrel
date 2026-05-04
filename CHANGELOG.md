@@ -1,8 +1,21 @@
+## [0.3.2] - 2026-05-04
+
+### features
+
+- add deposit wallet relayer support
+
+### miscellaneous
+
+- bump version to v0.3.2
 ## [0.3.1] - 2026-04-22
 
 ### features
 
 - add v2 collateral builders
+
+### documentation
+
+- update changelog for 0.3.1
 
 ### miscellaneous
 
