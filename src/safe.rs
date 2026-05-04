@@ -70,6 +70,14 @@ pub enum SubmitKind {
 	/// Safe deployment request.
 	SafeCreate,
 
+	#[serde(rename = "WALLET")]
+	/// Deposit-wallet batch request.
+	Wallet,
+
+	#[serde(rename = "WALLET-CREATE")]
+	/// Deposit-wallet deployment request.
+	WalletCreate,
+
 	#[serde(rename = "PROXY")]
 	/// Proxy transaction request.
 	Proxy,

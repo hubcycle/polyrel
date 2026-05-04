@@ -17,13 +17,13 @@ use base64::{
 use hmac::{Hmac, Mac};
 use reqwest::header::{CONTENT_TYPE, HeaderMap, HeaderName, HeaderValue};
 use secrecy::{ExposeSecret, SecretString};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use sha2::Sha256;
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 use url::Url;
 use uuid::Uuid;
 
-use crate::{PolyrelError, safe::SubmitRequest};
+use crate::PolyrelError;
 
 mod sealed {
 	use super::{HeaderMap, PolyrelError};
@@ -51,6 +51,8 @@ pub struct BuilderAuthenticated {
 pub enum WalletQueryKind {
 	/// Query the Safe wallet view.
 	Safe,
+	/// Query the deposit wallet view.
+	Wallet,
 	/// Query the proxy wallet view.
 	Proxy,
 }
@@ -107,6 +109,10 @@ pub enum RelayerTransactionKind {
 	Safe,
 	/// Safe deployment request.
 	SafeCreate,
+	/// Deposit-wallet batch request.
+	Wallet,
+	/// Deposit-wallet deployment request.
+	WalletCreate,
 	/// Proxy transaction request.
 	Proxy,
 }
@@ -223,12 +229,16 @@ impl RelayerTransactionKind {
 	const PROXY_KIND: &str = "PROXY";
 	const SAFE_CREATE_KIND: &str = "SAFE-CREATE";
 	const SAFE_KIND: &str = "SAFE";
+	const WALLET_CREATE_KIND: &str = "WALLET-CREATE";
+	const WALLET_KIND: &str = "WALLET";
 
 	/// Returns the canonical wire-format transaction kind string.
 	pub fn as_str(&self) -> &'static str {
 		match self {
 			Self::Safe => Self::SAFE_KIND,
 			Self::SafeCreate => Self::SAFE_CREATE_KIND,
+			Self::Wallet => Self::WALLET_KIND,
+			Self::WalletCreate => Self::WALLET_CREATE_KIND,
 			Self::Proxy => Self::PROXY_KIND,
 		}
 	}
@@ -408,12 +418,14 @@ impl RelayerApiKey {
 
 impl WalletQueryKind {
 	const SAFE_KIND: &str = "SAFE";
+	const WALLET_KIND: &str = "WALLET";
 	const PROXY_KIND: &str = "PROXY";
 
 	/// Returns the wire-format query value expected by the relayer.
 	pub fn as_str(&self) -> &'static str {
 		match self {
 			Self::Safe => Self::SAFE_KIND,
+			Self::Wallet => Self::WALLET_KIND,
 			Self::Proxy => Self::PROXY_KIND,
 		}
 	}
@@ -587,7 +599,7 @@ impl<S> RelayerClient<S> {
 		transactions.into_iter().map(RelayerTransaction::try_from).collect()
 	}
 
-	/// Fetches the current nonce for a Safe or proxy wallet.
+	/// Fetches the current nonce for a Safe, deposit wallet, or proxy wallet.
 	pub async fn current_nonce(
 		&self,
 		address: Address,
@@ -673,11 +685,11 @@ impl<S> RelayerClient<S>
 where
 	S: sealed::Authenticated,
 {
-	/// Submits a signed relayer request.
-	pub async fn submit(
-		&self,
-		request: &SubmitRequest,
-	) -> Result<SubmittedTransaction, PolyrelError> {
+	/// Submits a serialized relayer request.
+	pub async fn submit<T>(&self, request: &T) -> Result<SubmittedTransaction, PolyrelError>
+	where
+		T: Serialize,
+	{
 		let url = self.endpoint(PATH_SUBMIT)?;
 		let body =
 			serde_json::to_string(request).map_err(|e| PolyrelError::serialize(e.to_string()))?;
@@ -802,6 +814,8 @@ impl FromStr for RelayerTransactionKind {
 		match s {
 			Self::SAFE_KIND => Ok(Self::Safe),
 			Self::SAFE_CREATE_KIND => Ok(Self::SafeCreate),
+			Self::WALLET_KIND => Ok(Self::Wallet),
+			Self::WALLET_CREATE_KIND => Ok(Self::WalletCreate),
 			Self::PROXY_KIND => Ok(Self::Proxy),
 			_ => Err(PolyrelError::deserialize(format!(
 				"unknown transaction kind: {s}",
@@ -1319,6 +1333,28 @@ mod tests {
 	}
 
 	#[tokio::test]
+	async fn current_nonce_supports_wallet_query_kind() {
+		// Arrange
+		let server = MockServer::start().await;
+		Mock::given(method(Method::GET.as_str()))
+			.and(path("/nonce"))
+			.and(query_param(QUERY_ADDRESS, format!("{AUTH_ADDRESS:#x}")))
+			.and(query_param(QUERY_TYPE, WalletQueryKind::WALLET_KIND))
+			.respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+				"nonce": NONCE_VALUE
+			})))
+			.mount(&server)
+			.await;
+		let client = RelayerClient::new(base_url(&server));
+
+		// Act
+		let response = client.current_nonce(AUTH_ADDRESS, WalletQueryKind::Wallet).await.unwrap();
+
+		// Assert
+		assert_eq!(response.nonce(), U256::from(12_u64));
+	}
+
+	#[tokio::test]
 	async fn is_safe_deployed_hits_expected_path_and_query() {
 		// Arrange
 		let server = MockServer::start().await;
@@ -1617,6 +1653,14 @@ mod tests {
 			RelayerTransactionKind::SafeCreate
 		);
 		assert_eq!(
+			RelayerTransactionKind::from_str(RelayerTransactionKind::WALLET_KIND).unwrap(),
+			RelayerTransactionKind::Wallet
+		);
+		assert_eq!(
+			RelayerTransactionKind::from_str(RelayerTransactionKind::WALLET_CREATE_KIND).unwrap(),
+			RelayerTransactionKind::WalletCreate
+		);
+		assert_eq!(
 			RelayerTransactionKind::from_str(RelayerTransactionKind::PROXY_KIND).unwrap(),
 			RelayerTransactionKind::Proxy
 		);
@@ -1809,6 +1853,38 @@ mod tests {
 
 		// Assert
 		assert!(matches!(result, Err(PolyrelError::Deserialize(_))));
+	}
+
+	#[test]
+	fn relayer_transaction_parses_wallet_kind_from_dto() {
+		// Arrange
+		let mut dto = relayer_transaction_dto();
+		dto.transaction_type = Some(RelayerTransactionKind::WALLET_KIND.to_owned());
+
+		// Act
+		let transaction = RelayerTransaction::try_from(dto).unwrap();
+
+		// Assert
+		assert_eq!(
+			transaction.transaction_kind(),
+			Some(RelayerTransactionKind::Wallet)
+		);
+	}
+
+	#[test]
+	fn relayer_transaction_parses_wallet_create_kind_from_dto() {
+		// Arrange
+		let mut dto = relayer_transaction_dto();
+		dto.transaction_type = Some(RelayerTransactionKind::WALLET_CREATE_KIND.to_owned());
+
+		// Act
+		let transaction = RelayerTransaction::try_from(dto).unwrap();
+
+		// Assert
+		assert_eq!(
+			transaction.transaction_kind(),
+			Some(RelayerTransactionKind::WalletCreate)
+		);
 	}
 
 	#[test]
