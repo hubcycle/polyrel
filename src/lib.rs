@@ -79,7 +79,7 @@
 //! let create_context = deposit_wallet::DepositWalletCreateContext::builder()
 //!     .owner(address!("6e0c80c90ea6c15917308f820eac91ce2724b5b5"))
 //!     .deposit_wallet_factory(address!("00000000000fb5c9adea0298d729a0cb3823cc07"))
-//!     .deposit_wallet_implementation(address!("58ca52ebe0dadfdf531cde7062e76746de4db1eb"))
+//!     .deposit_wallet_beacon(address!("7a18edfe055488a3128f01f563e5b479d92ffc3a"))
 //!     .build();
 //! let create_draft = deposit_wallet::build_create_draft(&create_context);
 //! let deposit_wallet = create_draft.deposit_wallet_address();
