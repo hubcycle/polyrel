@@ -1,3 +1,12 @@
+## [0.4.0] - 2026-06-30
+
+### features
+
+- [**breaking**] derive deposit wallet beacon proxy addresses
+
+### miscellaneous
+
+- bump version to v0.4.0
 ## [0.3.2] - 2026-05-04
 
 ### features

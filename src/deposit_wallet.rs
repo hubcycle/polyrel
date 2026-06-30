@@ -8,6 +8,17 @@
 //!
 //! It does not implement CLOB `POLY_1271` order signing.
 //!
+//! # Choosing UUPS vs beacon
+//!
+//! Wallets created from the 2026-06-08 factory upgrade onward are ERC-1967 beacon proxies
+//! ([`derive_beacon_address`]); earlier ones are legacy UUPS clones ([`derive_uups_address`]). The
+//! two shapes share a factory and CREATE2 salt but differ in init code hash, so the same owner maps
+//! to different addresses. New wallets are always beacons, so `WALLET-CREATE` and
+//! [`build_create_draft`] use the beacon shape.
+//!
+//! Picking the shape for an owner that may already hold a legacy wallet needs on-chain state (which
+//! of the two derived addresses has code) and is the caller's job; this crate does no RPC.
+//!
 //! # Examples
 //!
 //! ```no_run
@@ -20,7 +31,7 @@
 //! let create_context = deposit_wallet::DepositWalletCreateContext::builder()
 //!     .owner(address!("6e0c80c90ea6c15917308f820eac91ce2724b5b5"))
 //!     .deposit_wallet_factory(address!("00000000000fb5c9adea0298d729a0cb3823cc07"))
-//!     .deposit_wallet_implementation(address!("50a88fe9a441cb4c9c2ad6a2207ce2795c7d7fbd"))
+//!     .deposit_wallet_beacon(address!("7a18edfe055488a3128f01f563e5b479d92ffc3a"))
 //!     .build();
 //! let create_draft = deposit_wallet::build_create_draft(&create_context);
 //! let deposit_wallet = create_draft.deposit_wallet_address();
@@ -80,6 +91,13 @@ const ERC1967_CONST2: B256 =
 	b256!("5155f3363d3d373d3d363d7f360894a13ba1a3210667c828492db98dca3e2076");
 const ERC1967_PREFIX: u128 = 0x61003d3d8160233d3973;
 const ERC1967_SUFFIX: [u8; 2] = [0x60, 0x09];
+const ERC1967_BEACON_CONST1: B256 =
+	b256!("b3582b35133d50545afa5036515af43d6000803e604d573d6000fd5b3d6000f3");
+const ERC1967_BEACON_CONST2: B256 =
+	b256!("1b60e01b36527fa3f0ad74e5423aebfd80d3ef4346578335a9a72aeaee59ff6c");
+const ERC1967_BEACON_CONST3: [u8; 23] =
+	alloy_primitives::hex!("60195155f3363d3d373d3d363d602036600436635c60da");
+const ERC1967_BEACON_PREFIX: u128 = 0x6100523d8160233d3973;
 const PRIMARY_TYPE_BATCH: &str = "Batch";
 const PRIMARY_TYPE_CALL: &str = "Call";
 const SOL_TYPE_ADDRESS: &str = "address";
@@ -126,7 +144,7 @@ pub struct DepositWalletDeadline(U256);
 pub struct DepositWalletCreateContext {
 	owner: Address,
 	deposit_wallet_factory: Address,
-	deposit_wallet_implementation: Address,
+	deposit_wallet_beacon: Address,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Builder)]
@@ -268,9 +286,9 @@ impl DepositWalletCreateContext {
 		self.deposit_wallet_factory
 	}
 
-	/// Returns the deposit-wallet implementation address used for ERC-1967 bytecode derivation.
-	pub fn deposit_wallet_implementation(&self) -> Address {
-		self.deposit_wallet_implementation
+	/// Returns the deposit-wallet beacon address.
+	pub fn deposit_wallet_beacon(&self) -> Address {
+		self.deposit_wallet_beacon
 	}
 }
 
@@ -350,8 +368,11 @@ impl DepositWalletBatchDraft {
 	}
 }
 
-/// Derives the deterministic deposit wallet address from the owner, factory, and implementation.
-pub fn derive_address(
+/// Derives the deterministic deposit wallet address for the legacy ERC-1967 **UUPS** clone shape.
+///
+/// UUPS clones embed the implementation in their own ERC-1967 slot and predate the 2026-06-08
+/// factory upgrade; use [`derive_beacon_address`] for wallets created after it.
+pub fn derive_uups_address(
 	owner: Address,
 	deposit_wallet_factory: Address,
 	deposit_wallet_implementation: Address,
@@ -363,12 +384,28 @@ pub fn derive_address(
 	create2_address(deposit_wallet_factory, salt, bytecode_hash)
 }
 
+/// Derives the deterministic deposit wallet address for the current ERC-1967 **beacon** proxy shape.
+///
+/// Used for every wallet created from the 2026-06-08 factory upgrade onward. Same factory and salt
+/// as [`derive_uups_address`], different init code hash.
+pub fn derive_beacon_address(
+	owner: Address,
+	deposit_wallet_factory: Address,
+	deposit_wallet_beacon: Address,
+) -> Address {
+	let salt = derive_salt(owner, deposit_wallet_factory);
+	let bytecode_hash =
+		init_code_hash_erc1967_beacon_proxy(deposit_wallet_beacon, owner, deposit_wallet_factory);
+
+	create2_address(deposit_wallet_factory, salt, bytecode_hash)
+}
+
 /// Builds an unsigned `WALLET-CREATE` draft.
 pub fn build_create_draft(context: &DepositWalletCreateContext) -> DepositWalletCreateDraft {
-	let deposit_wallet_address = derive_address(
+	let deposit_wallet_address = derive_beacon_address(
 		context.owner(),
 		context.deposit_wallet_factory(),
-		context.deposit_wallet_implementation(),
+		context.deposit_wallet_beacon(),
 	);
 
 	DepositWalletCreateDraft {
@@ -544,6 +581,28 @@ fn init_code_hash_erc1967(
 	alloy_primitives::keccak256(init_code)
 }
 
+fn init_code_hash_erc1967_beacon_proxy(
+	deposit_wallet_beacon: Address,
+	owner: Address,
+	deposit_wallet_factory: Address,
+) -> B256 {
+	let args = wallet_args(owner, deposit_wallet_factory).abi_encode();
+	let combined = ERC1967_BEACON_PREFIX + ((args.len() as u128) << 56);
+	let combined_bytes = combined.to_be_bytes();
+	let prefix_bytes = &combined_bytes[combined_bytes.len() - 10..];
+	let mut init_code =
+		Vec::with_capacity(10 + 20 + ERC1967_BEACON_CONST3.len() + 32 + 32 + args.len());
+
+	init_code.extend_from_slice(prefix_bytes);
+	init_code.extend_from_slice(deposit_wallet_beacon.as_slice());
+	init_code.extend_from_slice(&ERC1967_BEACON_CONST3);
+	init_code.extend_from_slice(ERC1967_BEACON_CONST2.as_slice());
+	init_code.extend_from_slice(ERC1967_BEACON_CONST1.as_slice());
+	init_code.extend_from_slice(&args);
+
+	alloy_primitives::keccak256(init_code)
+}
+
 fn create2_address(deployer: Address, salt: B256, init_code_hash: B256) -> Address {
 	let mut payload = [0_u8; 85];
 	payload[0] = 0xff;
@@ -578,9 +637,13 @@ mod tests {
 	const TEST_CREATE_REQUEST_JSON: &str = r#"{"from":"0x6e0c80c90ea6c15917308F820Eac91Ce2724B5b5","to":"0x00000000000Fb5C9ADea0298D729A0CB3823Cc07","type":"WALLET-CREATE"}"#;
 	const TEST_DEADLINE: u64 = 1_760_000_000;
 	const TEST_DEPOSIT_WALLET: Address = address!("7777777777777777777777777777777777777777");
+	const TEST_DEPOSIT_WALLET_BEACON: Address =
+		address!("7a18edfe055488a3128f01f563e5b479d92ffc3a");
 	const TEST_DEPOSIT_WALLET_IMPLEMENTATION: Address =
 		address!("50a88fe9a441cb4c9c2ad6a2207ce2795c7d7fbd");
 	const TEST_DERIVED_ADDRESS: Address = address!("02d39815f255814edb3cbb59aee668878cd95ac3");
+	const TEST_DERIVED_BEACON_ADDRESS: Address =
+		address!("1b7f973f23fb032a1f553625a9be25059843cd04");
 	const TEST_FACTORY: Address = address!("00000000000fb5c9adea0298d729a0cb3823cc07");
 	const TEST_FIRST_CALL_TARGET: Address = address!("1111111111111111111111111111111111111111");
 	const TEST_NONCE: u64 = 9;
@@ -593,7 +656,7 @@ mod tests {
 		DepositWalletCreateContext::builder()
 			.owner(TEST_OWNER)
 			.deposit_wallet_factory(TEST_FACTORY)
-			.deposit_wallet_implementation(TEST_DEPOSIT_WALLET_IMPLEMENTATION)
+			.deposit_wallet_beacon(TEST_DEPOSIT_WALLET_BEACON)
 			.build()
 	}
 
@@ -631,19 +694,51 @@ mod tests {
 	}
 
 	#[test]
-	fn derive_address_matches_expected_fixture() {
-		// Arrange
-		let context = create_context();
-
+	fn derive_uups_address_matches_expected_fixture() {
 		// Act
-		let address = derive_address(
-			context.owner(),
-			context.deposit_wallet_factory(),
-			context.deposit_wallet_implementation(),
-		);
+		let address =
+			derive_uups_address(TEST_OWNER, TEST_FACTORY, TEST_DEPOSIT_WALLET_IMPLEMENTATION);
 
 		// Assert
 		assert_eq!(address, TEST_DERIVED_ADDRESS);
+	}
+
+	#[test]
+	fn derive_uups_address_matches_official_polygon_vector() {
+		// Arrange
+		let owner = address!("a60601a4d903af91855c52bfb3814f6ba342f201");
+		let implementation = address!("58ca52ebe0dadfdf531cde7062e76746de4db1eb");
+		let expected = address!("8b60bf0f650bf7a0d93f10d72375b37de18f8c40");
+
+		// Act / Assert
+		assert_eq!(
+			derive_uups_address(owner, TEST_FACTORY, implementation),
+			expected
+		);
+	}
+
+	#[test]
+	fn derive_beacon_address_matches_official_polygon_vector() {
+		// Arrange
+		let owner = address!("0000000000000000000000000000000000000001");
+		let expected = address!("94bf330955a0b957662feaf878de77bf25f76cd9");
+
+		// Act / Assert
+		assert_eq!(
+			derive_beacon_address(owner, TEST_FACTORY, TEST_DEPOSIT_WALLET_BEACON),
+			expected
+		);
+	}
+
+	#[test]
+	fn uups_and_beacon_addresses_differ_for_same_owner() {
+		// Arrange
+		let uups =
+			derive_uups_address(TEST_OWNER, TEST_FACTORY, TEST_DEPOSIT_WALLET_IMPLEMENTATION);
+		let beacon = derive_beacon_address(TEST_OWNER, TEST_FACTORY, TEST_DEPOSIT_WALLET_BEACON);
+
+		// Act / Assert
+		assert_ne!(uups, beacon);
 	}
 
 	#[test]
@@ -655,7 +750,7 @@ mod tests {
 		let json = serde_json::to_string(draft.request()).unwrap();
 
 		// Assert
-		assert_eq!(draft.deposit_wallet_address(), TEST_DERIVED_ADDRESS);
+		assert_eq!(draft.deposit_wallet_address(), TEST_DERIVED_BEACON_ADDRESS);
 		assert_eq!(json, TEST_CREATE_REQUEST_JSON);
 	}
 
